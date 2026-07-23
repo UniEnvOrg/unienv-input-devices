@@ -1,0 +1,23 @@
+[project]
+name = "unienv_input_devices"
+version = "0.0.1a1"
+requires-python = ">= 3.10"
+dependencies = [
+    "unienv",
+    "numpy",
+    "avp_stream",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/UniEnvOrg/unienv-input-devices"
+Documentation = "https://github.com/UniEnvOrg/unienv-input-devices"
+Repository = "https://github.com/UniEnvOrg/unienv-input-devices"
+Issues = "https://github.com/UniEnvOrg/unienv-input-devices/issues"
+Changelog = "https://github.com/UniEnvOrg/unienv-input-devices/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["*"]
+exclude = ["training*", "tests*"]
