@@ -10,6 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+wilor = ["torch", "opencv-python", "scipy"]
 
 [project.urls]
 Homepage = "https://github.com/UniEnvOrg/unienv-input-devices"

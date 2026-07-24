@@ -87,3 +87,75 @@ def test_convert_vp_to_mediapipe(fingers):
 def test_public_api_exposed():
     assert hasattr(unienv_input_devices, "AVPTrackerNode")
     assert hasattr(unienv_input_devices, "convert_vp_to_mediapipe")
+
+
+# ====================== WiLoRHandNode smoke tests ======================
+
+from unienv_input_devices import WiLoRHandNode  # noqa: E402
+
+WILORED_EXPECTED_OBS_KEYS = {
+    "keypoints_3d_local",
+    "keypoints_3d",
+    "keypoints_2d",
+    "wrist_pose",
+    "hand_detected",
+}
+
+WILORED_EXPECTED_SHAPES_DTYPES = {
+    "keypoints_3d_local": ((21, 3), np.float32),
+    "keypoints_3d": ((21, 3), np.float32),
+    "keypoints_2d": ((21, 2), np.float32),
+    "wrist_pose": ((4, 4), np.float32),
+    "hand_detected": ((1,), np.float32),
+}
+
+
+def test_wilor_hand_node_smoke():
+    # connect=False must NOT require torch/cv2/scipy/wilor_mini.
+    node = WiLoRHandNode(connect=False)
+    try:
+        # Observation-only node: no action space.
+        assert node.action_space is None
+
+        # Observation space has the 5 expected keys with the right shapes/dtypes.
+        obs_space = node.observation_space
+        assert set(obs_space.spaces.keys()) == WILORED_EXPECTED_OBS_KEYS
+        for key, (shape, dtype) in WILORED_EXPECTED_SHAPES_DTYPES.items():
+            sub = obs_space.spaces[key]
+            assert sub.shape == shape, f"{key}: {sub.shape} != {shape}"
+            assert sub.dtype == dtype, f"{key}: {sub.dtype} != {dtype}"
+
+        # after_reset runs and yields a populated observation dict.
+        node.after_reset()
+        obs = node.get_observation()
+        assert obs is not None
+        assert set(obs.keys()) == WILORED_EXPECTED_OBS_KEYS
+        for key, (shape, dtype) in WILORED_EXPECTED_SHAPES_DTYPES.items():
+            arr = np.asarray(obs[key])
+            assert arr.shape == shape, f"{key}: {arr.shape} != {shape}"
+            assert arr.dtype == dtype, f"{key}: {arr.dtype} != {dtype}"
+
+        # hand_detected starts at 0.0 (no hand seen yet).
+        assert float(obs["hand_detected"][0]) == 0.0
+        assert node.is_hand_detected() is False
+
+        # post_environment_step runs without error (no-op when not connected).
+        node.post_environment_step(0.04)
+
+        # Helpers return the correct shapes/dtypes.
+        assert node.get_keypoints().shape == (21, 3)
+        assert node.get_keypoints(local=True).shape == (21, 3)
+        assert node.get_keypoints().dtype == np.float32
+        assert node.get_wrist_pose().shape == (4, 4)
+        assert node.get_wrist_pose().dtype == np.float32
+        assert node.get_keypoints_2d().shape == (21, 2)
+        assert node.get_keypoints_2d().dtype == np.float32
+    finally:
+        # close() must run cleanly even when never connected.
+        node.close()
+
+
+def test_wilor_hand_node_rejects_invalid_hand():
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        WiLoRHandNode(connect=False, hand="both")
