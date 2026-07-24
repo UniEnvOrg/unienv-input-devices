@@ -36,9 +36,10 @@ VP_TO_MEDIAPIPE = (
 def convert_vp_to_mediapipe(fingers_mat: np.ndarray) -> np.ndarray:
     """Map VisionPro (25, 4, 4) finger transforms to MediaPipe-style (21, 3) keypoints.
 
-    Takes the [:3, 3] translation column of each selected finger transform. The
-    output is float32. This is a faithful port of the reference implementation in
-    ``wuji-retargeting/example/input_devices/visionpro.py``.
+    Takes the [:3, 3] translation column of each selected finger transform, so the
+    keypoints inherit the finger transforms' frame — wrist-local (meters), not
+    world frame. The output is float32. This is a faithful port of the reference
+    implementation in ``wuji-retargeting/example/input_devices/visionpro.py``.
     """
     fingers_mat = np.asarray(fingers_mat)
     mediapipe_pose = np.zeros((21, 3), dtype=np.float32)
@@ -55,8 +56,12 @@ class AVPTrackerNode(WorldNode[
 
     The node is a pure sensor: ``action_space`` is ``None`` and any action passed
     to :meth:`set_next_action` is silently ignored. Observations are the raw AVP
-    world-frame transforms (meters, X-right / Y-forward / Z-up after the
-    ``avp_stream`` YUP2ZUP conversion) plus pinch distances and wrist rolls.
+    transforms (meters, X-right / Y-forward / Z-up after the ``avp_stream``
+    YUP2ZUP conversion) plus pinch distances and wrist rolls. ``head``,
+    ``left_wrist`` and ``right_wrist`` are world-frame (4, 4) transforms, while
+    ``left_fingers`` / ``right_fingers`` are (25, 4, 4) transforms in the
+    **wrist-local frame** (joint 0 is the wrist itself, at the origin). Compose
+    ``wrist @ finger`` to obtain world-frame finger poses.
 
     When ``connect=False`` (or no frame has arrived yet) the cached observation is
     a zero dict of the correct shapes/dtypes, so the node can be constructed and
@@ -320,7 +325,11 @@ class AVPTrackerNode(WorldNode[
         return np.asarray(self._current_observation[key], dtype=np.float32)
 
     def get_finger_keypoints(self, side: Literal["left", "right"]) -> np.ndarray:
-        """Return the (25, 3) translation columns of the cached finger transforms."""
+        """Return the (25, 3) translation columns of the cached finger transforms.
+
+        These are wrist-local coordinates (meters); joint 0 is the wrist at the
+        origin. Compose with the wrist transform for world-frame keypoints.
+        """
         key = f"{side}_fingers"
         fingers = np.asarray(self._current_observation[key], dtype=np.float32)
         return fingers[:, :3, 3].astype(np.float32, copy=False)
