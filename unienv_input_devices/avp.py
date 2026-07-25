@@ -210,7 +210,8 @@ class AVPTrackerNode(WorldNode[
         except ImportError as e:  # pragma: no cover — requires hardware/SDK
             raise ImportError(
                 "The 'avp_stream' package is required to connect to an Apple "
-                "Vision Pro Tracking Streamer. Install it with: pip install avp_stream"
+                "Vision Pro Tracking Streamer. Install it with: "
+                'pip install "unienv-input-devices[avp]"'
             ) from e
 
         self._streamer = VisionProStreamer(ip=self.ip, record=self.record)

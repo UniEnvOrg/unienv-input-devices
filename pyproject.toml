@@ -5,18 +5,22 @@ requires-python = ">= 3.10"
 dependencies = [
     "unienv",
     "numpy",
-    "avp_stream",
 ]
 
 [project.optional-dependencies]
 test = ["pytest"]
+avp = ["avp_stream"]
 wilor = [
     "torch",
     "opencv-python",
     "scipy",
+    # chumpy must come from git master (0.71) — PyPI 0.70 is broken on
+    # Python >= 3.11 (inspect.getargspec removed). Its legacy setup.py does
+    # `import pip`, so this extra only installs with --no-build-isolation:
+    #   pip install "unienv-input-devices[wilor]" --no-build-isolation
+    "chumpy @ git+https://github.com/mattloper/chumpy@master",
     # Not on PyPI; this fork carries torch>=2.6 / Python>=3.11 compat fixes
     # (relaxed pins, ultralytics>=8.4, explicit weights_only=False).
-    # NOTE: chumpy must be installed manually first — see README.
     "wilor_mini @ git+https://github.com/realquantumcookie/WiLoR-mini",
 ]
 
