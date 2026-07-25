@@ -95,6 +95,7 @@ from unienv_input_devices import WiLoRHandNode  # noqa: E402
 
 WILORED_EXPECTED_OBS_KEYS = {
     "keypoints_3d_local",
+    "keypoints_3d_wrist",
     "keypoints_3d",
     "keypoints_2d",
     "wrist_pose",
@@ -103,6 +104,7 @@ WILORED_EXPECTED_OBS_KEYS = {
 
 WILORED_EXPECTED_SHAPES_DTYPES = {
     "keypoints_3d_local": ((21, 3), np.float32),
+    "keypoints_3d_wrist": ((21, 3), np.float32),
     "keypoints_3d": ((21, 3), np.float32),
     "keypoints_2d": ((21, 2), np.float32),
     "wrist_pose": ((4, 4), np.float32),
@@ -150,9 +152,42 @@ def test_wilor_hand_node_smoke():
         assert node.get_wrist_pose().dtype == np.float32
         assert node.get_keypoints_2d().shape == (21, 2)
         assert node.get_keypoints_2d().dtype == np.float32
+        assert node.get_keypoints_wrist().shape == (21, 3)
+        assert node.get_keypoints_wrist().dtype == np.float32
     finally:
         # close() must run cleanly even when never connected.
         node.close()
+
+
+def test_wilor_keypoints_wrist_frame_math():
+    """keypoints_3d_wrist must satisfy kp_3d == kp_wrist @ R.T + cam_t."""
+    from scipy.spatial.transform import Rotation
+
+    rng = np.random.RandomState(0)
+    kp_local = rng.randn(1, 21, 3).astype(np.float64) * 0.05
+    cam_t = np.array([[0.05, 0.10, 0.42]])
+    rotvec = rng.randn(1, 1, 3) * 0.7
+    preds = {
+        "pred_keypoints_3d": kp_local,
+        "pred_cam_t_full": cam_t,
+        "pred_keypoints_2d": np.zeros((1, 21, 2)),
+        "global_orient": rotvec,
+    }
+    node = WiLoRHandNode(connect=False)
+    try:
+        obs = node._build_observation_from_detection({"wilor_preds": preds}, "right")
+    finally:
+        node.close()
+
+    R = Rotation.from_rotvec(rotvec.reshape(3)).as_matrix()
+    kp_local_2d = kp_local.reshape(21, 3)
+    # Forward: wrist-frame keypoints are R.T @ kp_local (per row: kp_local @ R).
+    np.testing.assert_allclose(obs["keypoints_3d_wrist"], kp_local_2d @ R, atol=1e-5)
+    # Inverse: camera-frame keypoints recover from wrist frame + wrist pose.
+    recon = obs["keypoints_3d_wrist"] @ R.T + obs["wrist_pose"][:3, 3]
+    np.testing.assert_allclose(recon, obs["keypoints_3d"], atol=1e-5)
+    # Sanity: wrist joint itself stays at the local origin in both frames.
+    np.testing.assert_allclose(obs["keypoints_3d_wrist"][0], kp_local_2d[0] @ R, atol=1e-5)
 
 
 def test_wilor_hand_node_rejects_invalid_hand():
@@ -203,6 +238,7 @@ def test_wilor_hand_node_both_hands_smoke():
         for h in ("left", "right"):
             assert node.get_keypoints(hand=h).shape == (21, 3)
             assert node.get_keypoints(local=True, hand=h).shape == (21, 3)
+            assert node.get_keypoints_wrist(hand=h).shape == (21, 3)
             assert node.get_wrist_pose(hand=h).shape == (4, 4)
             assert node.get_keypoints_2d(hand=h).shape == (21, 2)
 

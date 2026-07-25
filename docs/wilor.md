@@ -161,7 +161,8 @@ All entries are `np.float32`.
 
 | Key                  | Shape   | Frame / units                                                                 |
 |----------------------|---------|-------------------------------------------------------------------------------|
-| `keypoints_3d_local` | (21, 3) | MANO-local, wrist-rooted, meters (articulation-only)                          |
+| `keypoints_3d_local` | (21, 3) | Wrist-rooted, **camera-aligned** axes, meters (articulation-only)             |
+| `keypoints_3d_wrist` | (21, 3) | True wrist frame (origin **and** axes on the wrist, MANO root frame), meters |
 | `keypoints_3d`       | (21, 3) | Camera frame (x right, y down, z forward), meters = local + `pred_cam_t_full` |
 | `keypoints_2d`       | (21, 2) | Pixel coordinates, top-left origin                                            |
 | `wrist_pose`         | (4, 4)  | Camera-frame homogeneous transform; rotation from `global_orient` axis-angle  |
@@ -170,12 +171,22 @@ All entries are `np.float32`.
 21-keypoint order: wrist (0), thumb (1-4), index (5-8), middle (9-12),
 ring (13-16), little (17-20) — identical to the MediaPipe convention.
 
+**Which frame for robot control?** For an arm+hand setup, drive the arm from
+`wrist_pose` (full camera-frame EEF transform) and do hand IK on
+`keypoints_3d_wrist` — it is invariant to wrist translation *and* rotation
+(`R(global_orient).T @ keypoints_3d_local`), mirroring the AVP node's
+wrist-local `*_fingers` convention. Note the wrist frame follows the MANO
+root-frame convention; mapping it to your robot's EEF frame convention needs
+one constant offset rotation. `keypoints_3d_local` sits between the two:
+wrist-rooted but camera-aligned — invariant to translation only.
+
 ## Limitations
 
 - **Monocular depth is model-estimated.** Wrist translation (`pred_cam_t_full`)
   typically carries ~5-15 cm of error; finger articulation
-  (`keypoints_3d_local`) is considerably more reliable than absolute position.
-  Prefer `keypoints_3d_local` for retargeting joint angles.
+  (`keypoints_3d_local` / `keypoints_3d_wrist`) is considerably more reliable
+  than absolute position. Prefer the local/wrist-frame keypoints for
+  retargeting joint angles.
 - **Occlusion degrades silently.** When the hand is partially out of frame the
   pipeline may still return a detection with degraded keypoints. Gate
   downstream behavior on `hand_detected` and on reprojection-error checks

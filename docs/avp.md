@@ -68,11 +68,14 @@ the correct shapes/dtypes. This is handy for development and unit tests.
 
 ## Raw-data philosophy
 
-This node exposes **unfiltered** AVP world-frame data exactly as the
-`VisionProStreamer` provides it:
+This node exposes **unfiltered** AVP data exactly as the `VisionProStreamer`
+provides it:
 
-- `head`, `left_wrist`, `right_wrist` — homogeneous (4, 4) transforms.
-- `left_fingers`, `right_fingers` — (25, 4, 4) per-finger homogeneous transforms.
+- `head`, `left_wrist`, `right_wrist` — homogeneous (4, 4) transforms in the
+  AVP world frame.
+- `left_fingers`, `right_fingers` — (25, 4, 4) per-finger homogeneous
+  transforms in the **wrist-local frame** (joint 0 is the wrist itself, at the
+  origin). Compose `wrist @ finger` to obtain world-frame finger poses.
 - `left_pinch_distance`, `right_pinch_distance` — pinch distances in meters.
 - `left_wrist_roll`, `right_wrist_roll` — wrist roll angles in radians.
 

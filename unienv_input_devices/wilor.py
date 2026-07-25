@@ -77,8 +77,14 @@ class WiLoRHandNode(WorldNode[
 
     Coordinate frames (see the module docstring for the full treatment):
 
-    - ``keypoints_3d_local`` (21, 3): MANO-local, wrist-rooted, meters — the
-      articulation-only signal.
+    - ``keypoints_3d_local`` (21, 3): wrist-rooted but **camera-aligned**,
+      meters — the articulation-only signal. Identical axes to the camera
+      frame (x right, y down, z forward); only the origin sits on the wrist.
+    - ``keypoints_3d_wrist`` (21, 3): true **wrist-frame** keypoints, meters —
+      ``R(global_orient).T @ keypoints_3d_local``. Origin and axes both ride
+      the wrist (MANO root frame convention), so this signal is invariant to
+      hand rotation as well as translation — the right input for hand IK.
+      Matches the AVP node's wrist-local ``*_fingers`` convention.
     - ``keypoints_3d`` (21, 3): camera frame (x right, y down, z forward),
       meters — ``keypoints_3d_local + pred_cam_t_full``.
     - ``keypoints_2d`` (21, 2): pixel coordinates, top-left origin.
@@ -180,6 +186,13 @@ class WiLoRHandNode(WorldNode[
         spaces: Dict[str, BoxSpace] = {}
         for h in self._active_hands:
             spaces[self._obs_key(h, "keypoints_3d_local")] = BoxSpace(
+                NumpyComputeBackend,
+                low=-self._TRANSFORM_BOUND,
+                high=self._TRANSFORM_BOUND,
+                dtype=np.float32,
+                shape=(21, 3),
+            )
+            spaces[self._obs_key(h, "keypoints_3d_wrist")] = BoxSpace(
                 NumpyComputeBackend,
                 low=-self._TRANSFORM_BOUND,
                 high=self._TRANSFORM_BOUND,
@@ -323,6 +336,7 @@ class WiLoRHandNode(WorldNode[
         obs: Dict[str, NumpyArrayType] = {}
         for h in self._active_hands:
             obs[self._obs_key(h, "keypoints_3d_local")] = np.zeros((21, 3), dtype=np.float32)
+            obs[self._obs_key(h, "keypoints_3d_wrist")] = np.zeros((21, 3), dtype=np.float32)
             obs[self._obs_key(h, "keypoints_3d")] = np.zeros((21, 3), dtype=np.float32)
             obs[self._obs_key(h, "keypoints_2d")] = np.zeros((21, 2), dtype=np.float32)
             obs[self._obs_key(h, "wrist_pose")] = np.zeros((4, 4), dtype=np.float32)
@@ -377,12 +391,17 @@ class WiLoRHandNode(WorldNode[
         # Wrist rotation from axis-angle — (1, 1, 3) -> (3,).
         global_orient = np.asarray(preds["global_orient"], dtype=np.float32).reshape(3)
         R = Rotation.from_rotvec(global_orient).as_matrix().astype(np.float32)
+        # True wrist-frame keypoints: rotate the camera-aligned wrist-rooted
+        # keypoints into the MANO root frame. kp_wrist = R.T @ kp_local (per
+        # row) == kp_local @ R. Inverse check: kp_3d == kp_wrist @ R.T + cam_t.
+        kp_wrist = (kp_local @ R).astype(np.float32, copy=False)
         wrist_pose = np.zeros((4, 4), dtype=np.float32)
         wrist_pose[:3, :3] = R
         wrist_pose[:3, 3] = cam_t
         wrist_pose[3, 3] = 1.0
         return {
             self._obs_key(hand, "keypoints_3d_local"): kp_local.astype(np.float32, copy=False),
+            self._obs_key(hand, "keypoints_3d_wrist"): kp_wrist,
             self._obs_key(hand, "keypoints_3d"): kp_3d.astype(np.float32, copy=False),
             self._obs_key(hand, "keypoints_2d"): kp_2d.astype(np.float32, copy=False),
             self._obs_key(hand, "wrist_pose"): wrist_pose,
@@ -534,3 +553,14 @@ class WiLoRHandNode(WorldNode[
         ``hand`` is required when the node was constructed with ``hand="both"``.
         """
         return np.asarray(self._current_observation[self._obs_key(self._resolve_hand(hand), "keypoints_2d")], dtype=np.float32)
+
+    def get_keypoints_wrist(self, hand: Optional[str] = None) -> np.ndarray:
+        """Return the latest (21, 3) wrist-frame keypoints as float32 (meters).
+
+        Origin and axes both ride the wrist (``R(global_orient).T @
+        keypoints_3d_local``), so this signal is invariant to wrist translation
+        **and** rotation — the right input for hand IK, mirroring the AVP
+        node's wrist-local ``*_fingers`` convention. ``hand`` is required when
+        the node was constructed with ``hand="both"``.
+        """
+        return np.asarray(self._current_observation[self._obs_key(self._resolve_hand(hand), "keypoints_3d_wrist")], dtype=np.float32)
