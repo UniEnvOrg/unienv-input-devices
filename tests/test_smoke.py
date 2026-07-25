@@ -158,4 +158,70 @@ def test_wilor_hand_node_smoke():
 def test_wilor_hand_node_rejects_invalid_hand():
     import pytest as _pytest
     with _pytest.raises(ValueError):
-        WiLoRHandNode(connect=False, hand="both")
+        WiLoRHandNode(connect=False, hand="middle")
+
+
+def test_wilor_hand_node_both_hands_smoke():
+    # connect=False must NOT require torch/cv2/scipy/wilor_mini.
+    node = WiLoRHandNode(connect=False, hand="both")
+    try:
+        assert node.action_space is None
+
+        expected_keys = {
+            f"{h}_{base}"
+            for h in ("left", "right")
+            for base in WILORED_EXPECTED_OBS_KEYS
+        }
+        expected_shapes = {
+            f"{h}_{base}": v
+            for h in ("left", "right")
+            for base, v in WILORED_EXPECTED_SHAPES_DTYPES.items()
+        }
+
+        obs_space = node.observation_space
+        assert set(obs_space.spaces.keys()) == expected_keys
+        for key, (shape, dtype) in expected_shapes.items():
+            sub = obs_space.spaces[key]
+            assert sub.shape == shape, f"{key}: {sub.shape} != {shape}"
+            assert sub.dtype == dtype, f"{key}: {sub.dtype} != {dtype}"
+
+        node.after_reset()
+        obs = node.get_observation()
+        assert obs is not None
+        assert set(obs.keys()) == expected_keys
+        for key, (shape, dtype) in expected_shapes.items():
+            arr = np.asarray(obs[key])
+            assert arr.shape == shape, f"{key}: {arr.shape} != {shape}"
+            assert arr.dtype == dtype, f"{key}: {arr.dtype} != {dtype}"
+
+        assert node.is_hand_detected("left") is False
+        assert node.is_hand_detected("right") is False
+
+        node.post_environment_step(0.04)
+
+        # Helpers require an explicit hand in both-mode.
+        for h in ("left", "right"):
+            assert node.get_keypoints(hand=h).shape == (21, 3)
+            assert node.get_keypoints(local=True, hand=h).shape == (21, 3)
+            assert node.get_wrist_pose(hand=h).shape == (4, 4)
+            assert node.get_keypoints_2d(hand=h).shape == (21, 2)
+
+        import pytest as _pytest
+        with _pytest.raises(ValueError):
+            node.get_keypoints()
+        with _pytest.raises(ValueError):
+            node.is_hand_detected()
+        with _pytest.raises(ValueError):
+            node.get_keypoints(hand="middle")
+    finally:
+        node.close()
+
+
+def test_wilor_hand_node_single_hand_rejects_inactive_hand():
+    node = WiLoRHandNode(connect=False, hand="right")
+    try:
+        import pytest as _pytest
+        with _pytest.raises(ValueError):
+            node.get_keypoints(hand="left")
+    finally:
+        node.close()

@@ -89,6 +89,16 @@ class WiLoRHandNode(WorldNode[
     - ``hand_detected`` (1,): 1.0 if a hand of the configured handedness was
       found in the latest read, else 0.0.
 
+    Two-hand mode: with ``hand="both"`` the node tracks both hands in one
+    pass (the WiLoR-mini detector emits left/right classes and batches all
+    detected hands through a single model forward pass, so the second hand
+    is nearly free). Observation keys are then prefixed per hand —
+    ``left_keypoints_3d_local``, ``right_keypoints_3d_local``, ...,
+    ``left_hand_detected``, ``right_hand_detected`` — and each hand has its
+    own independent hold-last state. The public getters
+    (:meth:`get_keypoints`, :meth:`get_wrist_pose`, :meth:`is_hand_detected`,
+    :meth:`get_keypoints_2d`) take a required ``hand=`` argument in this mode.
+
     When ``connect=False`` (or no hand has been detected yet) the cached
     observation is a zero dict of the correct shapes/dtypes, so the node can
     be constructed and driven through the full lifecycle without ``torch``,
@@ -117,7 +127,7 @@ class WiLoRHandNode(WorldNode[
         name: str = "wilor_hand",
         camera_id: int = 0,
         *,
-        hand: Literal["left", "right"] = "right",
+        hand: Literal["left", "right", "both"] = "right",
         focal_length: float = 5000.0,
         width: Optional[int] = None,
         height: Optional[int] = None,
@@ -147,10 +157,15 @@ class WiLoRHandNode(WorldNode[
         self._pipe = None      # WiLorHandPose3dEstimationPipeline
         self._torch_device = None  # resolved torch.device (str form)
 
-        if self.hand not in ("left", "right"):
+        if self.hand not in ("left", "right", "both"):
             raise ValueError(
-                f"WiLoRHandNode: `hand` must be 'left' or 'right', got {self.hand!r}."
+                f"WiLoRHandNode: `hand` must be 'left', 'right' or 'both', "
+                f"got {self.hand!r}."
             )
+        # In "both" mode observation keys are prefixed per hand
+        # ("left_keypoints_3d", "right_wrist_pose", ...); single-hand mode
+        # keeps the original unprefixed keys for backward compatibility.
+        self._active_hands = ("left", "right") if self.hand == "both" else (self.hand,)
 
         if isinstance(world, World):
             assert world.backend == NumpyComputeBackend, "World backend must be NumpyComputeBackend."
@@ -161,47 +176,45 @@ class WiLoRHandNode(WorldNode[
         if self.connect:
             self._connect_hardware()
 
-        # Build the observation space.
-        self.observation_space = DictSpace(
-            NumpyComputeBackend,
-            {
-                "keypoints_3d_local": BoxSpace(
-                    NumpyComputeBackend,
-                    low=-self._TRANSFORM_BOUND,
-                    high=self._TRANSFORM_BOUND,
-                    dtype=np.float32,
-                    shape=(21, 3),
-                ),
-                "keypoints_3d": BoxSpace(
-                    NumpyComputeBackend,
-                    low=-self._TRANSFORM_BOUND,
-                    high=self._TRANSFORM_BOUND,
-                    dtype=np.float32,
-                    shape=(21, 3),
-                ),
-                "keypoints_2d": BoxSpace(
-                    NumpyComputeBackend,
-                    low=0.0,
-                    high=self._PIXEL_HIGH,
-                    dtype=np.float32,
-                    shape=(21, 2),
-                ),
-                "wrist_pose": BoxSpace(
-                    NumpyComputeBackend,
-                    low=-self._TRANSFORM_BOUND,
-                    high=self._TRANSFORM_BOUND,
-                    dtype=np.float32,
-                    shape=(4, 4),
-                ),
-                "hand_detected": BoxSpace(
-                    NumpyComputeBackend,
-                    low=0.0,
-                    high=1.0,
-                    dtype=np.float32,
-                    shape=(1,),
-                ),
-            },
-        )
+        # Build the observation space (one entry set per active hand).
+        spaces: Dict[str, BoxSpace] = {}
+        for h in self._active_hands:
+            spaces[self._obs_key(h, "keypoints_3d_local")] = BoxSpace(
+                NumpyComputeBackend,
+                low=-self._TRANSFORM_BOUND,
+                high=self._TRANSFORM_BOUND,
+                dtype=np.float32,
+                shape=(21, 3),
+            )
+            spaces[self._obs_key(h, "keypoints_3d")] = BoxSpace(
+                NumpyComputeBackend,
+                low=-self._TRANSFORM_BOUND,
+                high=self._TRANSFORM_BOUND,
+                dtype=np.float32,
+                shape=(21, 3),
+            )
+            spaces[self._obs_key(h, "keypoints_2d")] = BoxSpace(
+                NumpyComputeBackend,
+                low=0.0,
+                high=self._PIXEL_HIGH,
+                dtype=np.float32,
+                shape=(21, 2),
+            )
+            spaces[self._obs_key(h, "wrist_pose")] = BoxSpace(
+                NumpyComputeBackend,
+                low=-self._TRANSFORM_BOUND,
+                high=self._TRANSFORM_BOUND,
+                dtype=np.float32,
+                shape=(4, 4),
+            )
+            spaces[self._obs_key(h, "hand_detected")] = BoxSpace(
+                NumpyComputeBackend,
+                low=0.0,
+                high=1.0,
+                dtype=np.float32,
+                shape=(1,),
+            )
+        self.observation_space = DictSpace(NumpyComputeBackend, spaces)
         # Observation-only node: no action space.
         self.action_space = None
 
@@ -291,6 +304,15 @@ class WiLoRHandNode(WorldNode[
 
     # ========== Internal helpers ==========
 
+    def _obs_key(self, hand: str, base: str) -> str:
+        """Observation dict key for one hand's entry.
+
+        Single-hand mode keeps the historical unprefixed keys
+        (``"keypoints_3d"`` etc.); ``hand="both"`` prefixes per hand
+        (``"left_keypoints_3d"`` / ``"right_keypoints_3d"``).
+        """
+        return f"{hand}_{base}" if self.hand == "both" else base
+
     def _zero_observation(self) -> Dict[str, NumpyArrayType]:
         """Build the all-zeros observation dict of the correct shapes/dtypes.
 
@@ -298,22 +320,23 @@ class WiLoRHandNode(WorldNode[
         entries are zero so downstream consumers can branch on
         ``hand_detected`` before touching the keypoints/pose.
         """
-        return {
-            "keypoints_3d_local": np.zeros((21, 3), dtype=np.float32),
-            "keypoints_3d": np.zeros((21, 3), dtype=np.float32),
-            "keypoints_2d": np.zeros((21, 2), dtype=np.float32),
-            "wrist_pose": np.zeros((4, 4), dtype=np.float32),
-            "hand_detected": np.zeros((1,), dtype=np.float32),
-        }
+        obs: Dict[str, NumpyArrayType] = {}
+        for h in self._active_hands:
+            obs[self._obs_key(h, "keypoints_3d_local")] = np.zeros((21, 3), dtype=np.float32)
+            obs[self._obs_key(h, "keypoints_3d")] = np.zeros((21, 3), dtype=np.float32)
+            obs[self._obs_key(h, "keypoints_2d")] = np.zeros((21, 2), dtype=np.float32)
+            obs[self._obs_key(h, "wrist_pose")] = np.zeros((4, 4), dtype=np.float32)
+            obs[self._obs_key(h, "hand_detected")] = np.zeros((1,), dtype=np.float32)
+        return obs
 
-    def _select_detection(self, outputs) -> Optional[dict]:
-        """Return the first pipeline detection matching the configured handedness.
+    def _select_detection(self, outputs, hand: str) -> Optional[dict]:
+        """Return the first pipeline detection matching the given handedness.
 
         WiLoR's ``is_right`` is a float (1.0 for right, 0.0 for left). We match
-        ``self.hand == "right"`` against ``is_right == 1.0`` and
-        ``self.hand == "left"`` against ``is_right == 0.0``.
+        ``hand == "right"`` against ``is_right == 1.0`` and ``hand == "left"``
+        against ``is_right == 0.0``.
         """
-        want_right = self.hand == "right"
+        want_right = hand == "right"
         for out in outputs:
             is_right = float(out.get("is_right", 0.0))
             if want_right and is_right == 1.0:
@@ -322,7 +345,7 @@ class WiLoRHandNode(WorldNode[
                 return out
         return None
 
-    def _build_observation_from_detection(self, out: dict) -> Dict[str, NumpyArrayType]:
+    def _build_observation_from_detection(self, out: dict, hand: str) -> Dict[str, NumpyArrayType]:
         """Convert one WiLoR detection dict into the cached observation.
 
         Coordinate-frame notes (see module docstring for the full treatment):
@@ -359,11 +382,11 @@ class WiLoRHandNode(WorldNode[
         wrist_pose[:3, 3] = cam_t
         wrist_pose[3, 3] = 1.0
         return {
-            "keypoints_3d_local": kp_local.astype(np.float32, copy=False),
-            "keypoints_3d": kp_3d.astype(np.float32, copy=False),
-            "keypoints_2d": kp_2d.astype(np.float32, copy=False),
-            "wrist_pose": wrist_pose,
-            "hand_detected": np.ones((1,), dtype=np.float32),
+            self._obs_key(hand, "keypoints_3d_local"): kp_local.astype(np.float32, copy=False),
+            self._obs_key(hand, "keypoints_3d"): kp_3d.astype(np.float32, copy=False),
+            self._obs_key(hand, "keypoints_2d"): kp_2d.astype(np.float32, copy=False),
+            self._obs_key(hand, "wrist_pose"): wrist_pose,
+            self._obs_key(hand, "hand_detected"): np.ones((1,), dtype=np.float32),
         }
 
     # ========== WorldNode Implementation ==========
@@ -383,11 +406,13 @@ class WiLoRHandNode(WorldNode[
 
         - If not connected, this is a no-op (the zero observation is retained).
         - If ``cap.read()`` fails (e.g. camera disconnected), the previous
-          keypoints/pose are held and ``hand_detected`` is set to 0.0.
-        - If the pipeline returns no detection matching the configured
-          handedness, the previous keypoints/pose are held and
-          ``hand_detected`` is set to 0.0 (documented hold-last behavior).
-        - Otherwise all entries are populated and ``hand_detected`` is 1.0.
+          keypoints/pose are held and every active hand's ``hand_detected``
+          is set to 0.0.
+        - Each active hand is updated independently: if the pipeline returns
+          a detection of that handedness, its entries are refreshed and its
+          ``hand_detected`` is 1.0; otherwise that hand's previous
+          keypoints/pose are held and its ``hand_detected`` is set to 0.0
+          (documented per-hand hold-last behavior).
 
         The frame convention is **BGR** (the native OpenCV order, and what
         WiLoR's own pipeline tests pass directly to ``pipe.predict``).
@@ -397,18 +422,20 @@ class WiLoRHandNode(WorldNode[
 
         ok, frame = self._cap.read()
         if not ok or frame is None:
-            # Frame read failed — hold last geometry, mark no hand this tick.
-            self._current_observation["hand_detected"] = np.zeros((1,), dtype=np.float32)
+            # Frame read failed — hold last geometry, mark no hands this tick.
+            for h in self._active_hands:
+                self._current_observation[self._obs_key(h, "hand_detected")] = np.zeros((1,), dtype=np.float32)
             return
 
         outputs = self._pipe.predict(frame)
-        det = self._select_detection(outputs)
-        if det is None or "wilor_preds" not in det:
-            # No matching hand — hold last geometry, mark no hand this tick.
-            self._current_observation["hand_detected"] = np.zeros((1,), dtype=np.float32)
-            return
-
-        self._current_observation = self._build_observation_from_detection(det)
+        for h in self._active_hands:
+            det = self._select_detection(outputs, h)
+            if det is None or "wilor_preds" not in det:
+                # No matching hand — hold this hand's geometry, mark it absent.
+                self._current_observation[self._obs_key(h, "hand_detected")] = np.zeros((1,), dtype=np.float32)
+                continue
+            # Merge (not replace) so the other hand's held geometry survives.
+            self._current_observation.update(self._build_observation_from_detection(det, h))
 
     def after_reset(self, *, priority: int = 0, mask=None) -> None:
         self.post_environment_step(0.0, priority=priority)
@@ -445,7 +472,28 @@ class WiLoRHandNode(WorldNode[
 
     # ========== Public helpers ==========
 
-    def get_keypoints(self, local: bool = False) -> np.ndarray:
+    def _resolve_hand(self, hand: Optional[str]) -> str:
+        """Resolve the ``hand`` argument of the public getters.
+
+        Single-hand mode defaults to the configured hand; ``hand="both"``
+        requires an explicit 'left' or 'right'.
+        """
+        if hand is None:
+            if self.hand == "both":
+                raise ValueError(
+                    "WiLoRHandNode was constructed with hand='both' — pass "
+                    "hand='left' or hand='right' explicitly."
+                )
+            return self.hand
+        if hand not in ("left", "right"):
+            raise ValueError(f"`hand` must be 'left' or 'right', got {hand!r}.")
+        if hand not in self._active_hands:
+            raise ValueError(
+                f"This node tracks hand={self.hand!r}; hand={hand!r} is not active."
+            )
+        return hand
+
+    def get_keypoints(self, local: bool = False, hand: Optional[str] = None) -> np.ndarray:
         """Return the latest (21, 3) hand keypoints as float32.
 
         Parameters
@@ -455,23 +503,34 @@ class WiLoRHandNode(WorldNode[
             (``keypoints_3d_local``) — articulation-only, meters, invariant to
             wrist translation. If ``False`` (default), return the camera-frame
             keypoints (``keypoints_3d``): x right, y down, z forward, meters.
+        hand : str, optional
+            'left' or 'right'. Required when the node was constructed with
+            ``hand="both"``; ignored (defaults to the configured hand)
+            otherwise.
         """
         key = "keypoints_3d_local" if local else "keypoints_3d"
-        return np.asarray(self._current_observation[key], dtype=np.float32)
+        return np.asarray(self._current_observation[self._obs_key(self._resolve_hand(hand), key)], dtype=np.float32)
 
-    def get_wrist_pose(self) -> np.ndarray:
+    def get_wrist_pose(self, hand: Optional[str] = None) -> np.ndarray:
         """Return the latest (4, 4) camera-frame homogeneous wrist transform.
 
         Rotation comes from WiLoR's ``global_orient`` (axis-angle) via
         ``scipy.spatial.transform.Rotation.from_rotvec``; translation is
         ``pred_cam_t_full``. Camera frame: x right, y down, z forward, meters.
+        ``hand`` is required when the node was constructed with ``hand="both"``.
         """
-        return np.asarray(self._current_observation["wrist_pose"], dtype=np.float32)
+        return np.asarray(self._current_observation[self._obs_key(self._resolve_hand(hand), "wrist_pose")], dtype=np.float32)
 
-    def is_hand_detected(self) -> bool:
-        """True if a hand of the configured handedness was found in the latest read."""
-        return bool(self._current_observation["hand_detected"][0] >= 0.5)
+    def is_hand_detected(self, hand: Optional[str] = None) -> bool:
+        """True if a hand of the given handedness was found in the latest read.
 
-    def get_keypoints_2d(self) -> np.ndarray:
-        """Return the latest (21, 2) pixel keypoints (top-left origin, x right, y down)."""
-        return np.asarray(self._current_observation["keypoints_2d"], dtype=np.float32)
+        ``hand`` is required when the node was constructed with ``hand="both"``.
+        """
+        return bool(self._current_observation[self._obs_key(self._resolve_hand(hand), "hand_detected")][0] >= 0.5)
+
+    def get_keypoints_2d(self, hand: Optional[str] = None) -> np.ndarray:
+        """Return the latest (21, 2) pixel keypoints (top-left origin, x right, y down).
+
+        ``hand`` is required when the node was constructed with ``hand="both"``.
+        """
+        return np.asarray(self._current_observation[self._obs_key(self._resolve_hand(hand), "keypoints_2d")], dtype=np.float32)

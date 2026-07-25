@@ -60,6 +60,34 @@ node's capture params:
 WiLoRHandNode(..., width=640, height=480, fourcc="MJPG")
 ```
 
+## Two-hand tracking
+
+Construct the node with `hand="both"` to track both hands in a single pass.
+The WiLoR-mini detector emits left/right hand classes and batches all detected
+hands through one model forward pass, so the second hand is nearly free.
+
+In this mode the observation keys are prefixed per hand —
+`left_keypoints_3d_local`, `left_keypoints_3d`, `left_keypoints_2d`,
+`left_wrist_pose`, `left_hand_detected`, and the same five with `right_` —
+and each hand has its own independent hold-last state. The helper methods take
+a required `hand` argument:
+
+```python
+node = WiLoRHandNode(world, camera_id=0, hand="both", focal_length=456.0,
+                     width=640, height=480, fourcc="MJPG",
+                     connect=True, control_timestep=0.04, update_timestep=0.04)
+...
+obs, *_ = env.step(None)
+if node.is_hand_detected("left"):
+    left_kp = node.get_keypoints(local=True, hand="left")   # (21, 3)
+if node.is_hand_detected("right"):
+    right_wrist = node.get_wrist_pose(hand="right")         # (4, 4)
+```
+
+Identity comes from the detector's left/right classification, not temporal
+association — during hand-over-hand occlusion the detector may drop or
+mislabel a hand, so always gate on the per-hand `*_hand_detected` flag.
+
 ## Focal-length calibration
 
 WiLoR estimates camera translation from a weak-perspective model scaled by a
