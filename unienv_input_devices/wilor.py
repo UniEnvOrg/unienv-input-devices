@@ -122,6 +122,7 @@ class WiLoRHandNode(WorldNode[
         width: Optional[int] = None,
         height: Optional[int] = None,
         fps: Optional[int] = None,
+        fourcc: Optional[str] = None,
         device: Optional[str] = None,
         connect: bool = True,
         control_timestep: Optional[float] = 0.04,  # 25Hz
@@ -135,6 +136,7 @@ class WiLoRHandNode(WorldNode[
         self.width = width
         self.height = height
         self.fps = fps
+        self.fourcc = fourcc
         self._device_input = device  # stored separately; `device` is a read-only property
         self.connect = bool(connect)
 
@@ -244,6 +246,16 @@ class WiLoRHandNode(WorldNode[
                 f"WiLoRHandNode: cv2.VideoCapture({self.camera_id!r}) could not "
                 "be opened. Check the camera index / device permissions."
             )
+        if self.fourcc is not None:
+            # Set the pixel format before resolution — e.g. "MJPG" drastically
+            # reduces USB bandwidth, which is required for cameras attached to
+            # WSL2 via usbipd (uncompressed YUYV frames arrive zeroed/green).
+            if len(self.fourcc) != 4:
+                raise ValueError(
+                    f"WiLoRHandNode: `fourcc` must be a 4-character code like "
+                    f"'MJPG' or 'YUYV', got {self.fourcc!r}."
+                )
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
         if self.width is not None:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(self.width))
         if self.height is not None:
