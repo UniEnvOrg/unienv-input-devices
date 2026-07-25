@@ -272,9 +272,12 @@ class WiLoRHandNode(WorldNode[
         except ImportError as e:  # pragma: no cover — requires wilor_mini
             raise ImportError(
                 "WiLoRHandNode(connect=True) requires the 'wilor_mini' package, "
-                "which is not on PyPI. Install it from GitHub with:\n"
-                '  pip install "git+https://github.com/warmshao/WiLoR-mini"\n'
-                "Upstream recommends Python 3.10 + a CUDA PyTorch build. Model "
+                "which is not on PyPI. Install it via this package's 'wilor' "
+                "extra (pulls a torch>=2.6-compatible fork; see README), and "
+                "install chumpy manually first:\n"
+                '  pip install --no-build-isolation "chumpy @ '
+                'git+https://github.com/mattloper/chumpy@master"\n'
+                "A CUDA PyTorch build is strongly recommended. Model "
                 "weights and MANO assets auto-download from HuggingFace on first "
                 "use (CC-BY-NC-ND / non-commercial terms — see README)."
             ) from e

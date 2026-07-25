@@ -129,12 +129,20 @@ downstream nodes.
 ## Installation
 
 ```bash
-# 1. Torch / OpenCV / scipy (the WiLoR runtime deps this package lists).
-pip install unienv-input-devices[wilor]
+# 1. chumpy (a transitive WiLoR dep) must be installed manually first:
+#    PyPI's 0.70 is broken on Python >= 3.11 (inspect.getargspec was
+#    removed), and its legacy setup.py does `import pip`, which fails
+#    under pip's default build isolation. Git master (0.71) fixes the
+#    Python issue; --no-build-isolation works around the setup.py issue.
+pip install --no-build-isolation "chumpy @ git+https://github.com/mattloper/chumpy@master"
 
-# 2. WiLoR-mini itself — NOT on PyPI, install from GitHub.
-pip install "git+https://github.com/warmshao/WiLoR-mini"
+# 2. This package with the WiLoR runtime deps (torch / OpenCV / scipy)
+#    plus wilor_mini, pulled from a compat fork of warmshao/WiLoR-mini
+#    (torch>=2.6 and Python>=3.11 fixes; upstream is pinned to torch<=2.5).
+pip install unienv-input-devices[wilor]
 ```
+
+Tested with Python 3.12 + torch 2.13 (CUDA 13) + ultralytics 8.4.
 
 WiLoR model weights and the MANO hand-model assets auto-download from
 HuggingFace on first use of the pipeline. **Licensing:** WiLoR model weights
