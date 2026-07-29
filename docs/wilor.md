@@ -175,7 +175,7 @@ ring (13-16), little (17-20) — identical to the MediaPipe convention.
 `wrist_pose` (full camera-frame EEF transform) and do hand IK on
 `keypoints_3d_wrist` — it is invariant to wrist translation *and* rotation
 (`R(global_orient).T @ keypoints_3d_local`), mirroring the AVP node's
-wrist-local `*_fingers` convention. Note the wrist frame follows the MANO
+wrist-local `*_keypoints_3d_wrist` convention. Note the wrist frame follows the MANO
 root-frame convention; mapping it to your robot's EEF frame convention needs
 one constant offset rotation. `keypoints_3d_local` sits between the two:
 wrist-rooted but camera-aligned — invariant to translation only.

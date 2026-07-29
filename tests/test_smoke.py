@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import unienv_input_devices
-from unienv_input_devices import AVPTrackerNode, convert_vp_to_mediapipe
+from unienv_input_devices import AVPTrackerNode
 
 
 EXPECTED_OBS_KEYS = {
@@ -20,6 +20,10 @@ EXPECTED_OBS_KEYS = {
     "right_wrist",
     "left_fingers",
     "right_fingers",
+    "left_keypoints_3d_wrist",
+    "right_keypoints_3d_wrist",
+    "left_keypoints_3d",
+    "right_keypoints_3d",
     "left_pinch_distance",
     "right_pinch_distance",
     "left_wrist_roll",
@@ -32,6 +36,10 @@ EXPECTED_SHAPES_DTYPES = {
     "right_wrist": ((4, 4), np.float32),
     "left_fingers": ((25, 4, 4), np.float32),
     "right_fingers": ((25, 4, 4), np.float32),
+    "left_keypoints_3d_wrist": ((21, 3), np.float32),
+    "right_keypoints_3d_wrist": ((21, 3), np.float32),
+    "left_keypoints_3d": ((21, 3), np.float32),
+    "right_keypoints_3d": ((21, 3), np.float32),
     "left_pinch_distance": ((1,), np.float32),
     "right_pinch_distance": ((1,), np.float32),
     "left_wrist_roll": ((1,), np.float32),
@@ -45,7 +53,7 @@ def test_avp_tracker_node_smoke():
         # Observation-only node: no action space.
         assert node.action_space is None
 
-        # Observation space has the 9 expected keys with the right shapes.
+        # Observation space has the 13 expected keys with the right shapes.
         obs_space = node.observation_space
         assert set(obs_space.spaces.keys()) == EXPECTED_OBS_KEYS
         for key, (shape, dtype) in EXPECTED_SHAPES_DTYPES.items():
@@ -65,28 +73,72 @@ def test_avp_tracker_node_smoke():
 
         # post_environment_step runs without error.
         node.post_environment_step(0.04)
+
+        # Keypoint getters return the correct shapes/dtypes.
+        for side in ("left", "right"):
+            assert node.get_keypoints_wrist(side).shape == (21, 3)
+            assert node.get_keypoints_wrist(side).dtype == np.float32
+            assert node.get_keypoints(side).shape == (21, 3)
+            assert node.get_keypoints(side).dtype == np.float32
     finally:
         # close() must run cleanly even when never connected.
         node.close()
 
 
-@pytest.mark.parametrize(
-    "fingers",
-    [
-        np.zeros((25, 4, 4), dtype=np.float64),
-        np.random.RandomState(0).randn(25, 4, 4).astype(np.float64),
-    ],
-)
-def test_convert_vp_to_mediapipe(fingers):
-    out = convert_vp_to_mediapipe(fingers)
-    assert isinstance(out, np.ndarray)
-    assert out.shape == (21, 3)
-    assert out.dtype == np.float32
+def test_avp_keypoints_observation_math():
+    """keypoints_3d_wrist selects MediaPipe indices; keypoints_3d = wrist @ local."""
+    from scipy.spatial.transform import Rotation
+
+    rng = np.random.RandomState(0)
+
+    def make_wrist(rotvec):
+        wrist = np.eye(4, dtype=np.float64)
+        wrist[:3, :3] = Rotation.from_rotvec(rotvec).as_matrix()
+        wrist[:3, 3] = rng.randn(3) * 0.2
+        return wrist
+
+    latest = {
+        "head": np.eye(4, dtype=np.float64)[None],
+        "left_wrist": make_wrist(rng.randn(3))[None],
+        "right_wrist": make_wrist(rng.randn(3))[None],
+        "left_fingers": rng.randn(25, 4, 4),
+        "right_fingers": rng.randn(25, 4, 4),
+        "left_pinch_distance": 0.05,
+        "right_pinch_distance": 0.03,
+        "left_wrist_roll": 0.1,
+        "right_wrist_roll": -0.2,
+    }
+    node = AVPTrackerNode(connect=False)
+    try:
+        obs = node._build_observation(latest)
+    finally:
+        node.close()
+
+    idx = np.asarray(
+        (0, 1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 24),
+        dtype=np.intp,
+    )
+    for side in ("left", "right"):
+        fingers = np.asarray(latest[f"{side}_fingers"], dtype=np.float32)
+        wrist = np.asarray(latest[f"{side}_wrist"], dtype=np.float32).reshape(4, 4)
+        # Wrist-local keypoints are the translation columns of the mapped joints.
+        np.testing.assert_allclose(
+            obs[f"{side}_keypoints_3d_wrist"], fingers[idx, :3, 3], atol=1e-6
+        )
+        # World-frame keypoints: independent homogeneous composition
+        # wrist @ [kp, 1] (not the implementation's row-vector form).
+        kp_homog = np.concatenate(
+            [fingers[idx, :3, 3], np.ones((21, 1), dtype=np.float32)], axis=1
+        )
+        expected_world = (wrist @ kp_homog.T).T[:, :3]
+        np.testing.assert_allclose(obs[f"{side}_keypoints_3d"], expected_world, atol=1e-6)
 
 
 def test_public_api_exposed():
     assert hasattr(unienv_input_devices, "AVPTrackerNode")
-    assert hasattr(unienv_input_devices, "convert_vp_to_mediapipe")
+    assert hasattr(unienv_input_devices, "WiLoRHandNode")
+    # The refactor moved keypoint conversion into the observation space.
+    assert not hasattr(unienv_input_devices, "convert_vp_to_mediapipe")
 
 
 # ====================== WiLoRHandNode smoke tests ======================

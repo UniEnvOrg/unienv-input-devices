@@ -3,8 +3,9 @@
 This node exposes the raw, unfiltered tracking stream coming from the AVP
 ``VisionProStreamer`` (hand-tracking gRPC on port 12345). It performs no
 calibration, filtering or retargeting — those concerns belong in downstream
-nodes. The :func:`convert_vp_to_mediapipe` helper is provided as a convenience
-for retargeting pipelines that expect MediaPipe-style (21, 3) keypoints.
+nodes. MediaPipe-style (21, 3) finger keypoints are exposed directly in the
+observation (``*_keypoints_3d_wrist`` / ``*_keypoints_3d``), mirroring the
+WiLoR hand node's keypoint conventions.
 """
 
 from typing import Dict, Literal, Optional
@@ -22,30 +23,17 @@ from unienv_interface.backends.numpy import (
 )
 from unienv_interface.space import DictSpace, BoxSpace
 
-# VisionPro 25-joint layout -> MediaPipe 21-landmark layout. Faithful port of
+# VisionPro 25-joint layout -> MediaPipe 21-landmark layout (wrist 0, thumb
+# 1-4, index 5-8, middle 9-12, ring 13-16, little 17-20). Faithful port of
 # /tmp/tianji_teleop/wuji-retargeting/example/input_devices/visionpro.py.
-VP_TO_MEDIAPIPE = (
+_VP_TO_MEDIAPIPE = (
     0, 1, 2, 3, 4,
     6, 7, 8, 9,
     11, 12, 13, 14,
     16, 17, 18, 19,
     21, 22, 23, 24,
 )
-
-
-def convert_vp_to_mediapipe(fingers_mat: np.ndarray) -> np.ndarray:
-    """Map VisionPro (25, 4, 4) finger transforms to MediaPipe-style (21, 3) keypoints.
-
-    Takes the [:3, 3] translation column of each selected finger transform, so the
-    keypoints inherit the finger transforms' frame — wrist-local (meters), not
-    world frame. The output is float32. This is a faithful port of the reference
-    implementation in ``wuji-retargeting/example/input_devices/visionpro.py``.
-    """
-    fingers_mat = np.asarray(fingers_mat)
-    mediapipe_pose = np.zeros((21, 3), dtype=np.float32)
-    for mp_idx, vp_idx in enumerate(VP_TO_MEDIAPIPE):
-        mediapipe_pose[mp_idx] = fingers_mat[vp_idx][:3, 3]
-    return mediapipe_pose.astype(np.float32, copy=False)
+_VP_TO_MEDIAPIPE_IDX = np.asarray(_VP_TO_MEDIAPIPE, dtype=np.intp)
 
 
 class AVPTrackerNode(WorldNode[
@@ -62,6 +50,18 @@ class AVPTrackerNode(WorldNode[
     ``left_fingers`` / ``right_fingers`` are (25, 4, 4) transforms in the
     **wrist-local frame** (joint 0 is the wrist itself, at the origin). Compose
     ``wrist @ finger`` to obtain world-frame finger poses.
+
+    MediaPipe-style finger keypoints are exposed directly in the observation,
+    mirroring the WiLoR hand node's conventions:
+
+    - ``left_keypoints_3d_wrist`` / ``right_keypoints_3d_wrist`` (21, 3):
+      wrist-local keypoints (meters) in MediaPipe order (wrist 0, thumb 1-4,
+      index 5-8, middle 9-12, ring 13-16, little 17-20) — the translation
+      columns of the mapped finger transforms. Same frame/ordering contract
+      as WiLoR's ``keypoints_3d_wrist``.
+    - ``left_keypoints_3d`` / ``right_keypoints_3d`` (21, 3): AVP world-frame
+      keypoints (meters) — ``wrist @ keypoints_3d_wrist``, the analog of
+      WiLoR's camera-frame ``keypoints_3d``.
 
     When ``connect=False`` (or no frame has arrived yet) the cached observation is
     a zero dict of the correct shapes/dtypes, so the node can be constructed and
@@ -161,6 +161,34 @@ class AVPTrackerNode(WorldNode[
                     dtype=np.float32,
                     shape=(25, 4, 4),
                 ),
+                "left_keypoints_3d_wrist": BoxSpace(
+                    NumpyComputeBackend,
+                    low=-self._TRANSFORM_BOUND,
+                    high=self._TRANSFORM_BOUND,
+                    dtype=np.float32,
+                    shape=(21, 3),
+                ),
+                "right_keypoints_3d_wrist": BoxSpace(
+                    NumpyComputeBackend,
+                    low=-self._TRANSFORM_BOUND,
+                    high=self._TRANSFORM_BOUND,
+                    dtype=np.float32,
+                    shape=(21, 3),
+                ),
+                "left_keypoints_3d": BoxSpace(
+                    NumpyComputeBackend,
+                    low=-self._TRANSFORM_BOUND,
+                    high=self._TRANSFORM_BOUND,
+                    dtype=np.float32,
+                    shape=(21, 3),
+                ),
+                "right_keypoints_3d": BoxSpace(
+                    NumpyComputeBackend,
+                    low=-self._TRANSFORM_BOUND,
+                    high=self._TRANSFORM_BOUND,
+                    dtype=np.float32,
+                    shape=(21, 3),
+                ),
                 "left_pinch_distance": BoxSpace(
                     NumpyComputeBackend,
                     low=0.0,
@@ -226,6 +254,10 @@ class AVPTrackerNode(WorldNode[
             "right_wrist": np.zeros((4, 4), dtype=np.float32),
             "left_fingers": np.zeros((25, 4, 4), dtype=np.float32),
             "right_fingers": np.zeros((25, 4, 4), dtype=np.float32),
+            "left_keypoints_3d_wrist": np.zeros((21, 3), dtype=np.float32),
+            "right_keypoints_3d_wrist": np.zeros((21, 3), dtype=np.float32),
+            "left_keypoints_3d": np.zeros((21, 3), dtype=np.float32),
+            "right_keypoints_3d": np.zeros((21, 3), dtype=np.float32),
             "left_pinch_distance": np.zeros((1,), dtype=np.float32),
             "right_pinch_distance": np.zeros((1,), dtype=np.float32),
             "left_wrist_roll": np.zeros((1,), dtype=np.float32),
@@ -245,6 +277,15 @@ class AVPTrackerNode(WorldNode[
         # Finger transforms are (25, 4, 4) already — copy as-is.
         left_fingers = np.array(latest["left_fingers"], dtype=np.float32, copy=True)
         right_fingers = np.array(latest["right_fingers"], dtype=np.float32, copy=True)
+        # MediaPipe-style (21, 3) wrist-local keypoints: select the 21 mapped
+        # joints and take their translation columns (meters, wrist-local frame).
+        # Same frame/ordering contract as WiLoR's ``keypoints_3d_wrist``.
+        left_kp_wrist = left_fingers[_VP_TO_MEDIAPIPE_IDX, :3, 3]
+        right_kp_wrist = right_fingers[_VP_TO_MEDIAPIPE_IDX, :3, 3]
+        # AVP world-frame keypoints: wrist @ keypoints (per row, kp @ R.T + t).
+        # The analog of WiLoR's camera-frame ``keypoints_3d``.
+        left_kp_world = left_kp_wrist @ left_wrist[:3, :3].T + left_wrist[:3, 3]
+        right_kp_world = right_kp_wrist @ right_wrist[:3, :3].T + right_wrist[:3, 3]
         # Scalars -> shape-(1,) arrays.
         left_pinch = np.asarray(latest["left_pinch_distance"], dtype=np.float32).reshape(1)
         right_pinch = np.asarray(latest["right_pinch_distance"], dtype=np.float32).reshape(1)
@@ -256,6 +297,10 @@ class AVPTrackerNode(WorldNode[
             "right_wrist": right_wrist,
             "left_fingers": left_fingers,
             "right_fingers": right_fingers,
+            "left_keypoints_3d_wrist": left_kp_wrist,
+            "right_keypoints_3d_wrist": right_kp_wrist,
+            "left_keypoints_3d": left_kp_world,
+            "right_keypoints_3d": right_kp_world,
             "left_pinch_distance": left_pinch,
             "right_pinch_distance": right_pinch,
             "left_wrist_roll": left_roll,
@@ -325,15 +370,24 @@ class AVPTrackerNode(WorldNode[
         key = f"{side}_wrist"
         return np.asarray(self._current_observation[key], dtype=np.float32)
 
-    def get_finger_keypoints(self, side: Literal["left", "right"]) -> np.ndarray:
-        """Return the (25, 3) translation columns of the cached finger transforms.
+    def get_keypoints_wrist(self, side: Literal["left", "right"]) -> np.ndarray:
+        """Return the latest (21, 3) wrist-local MediaPipe-style keypoints (meters).
 
-        These are wrist-local coordinates (meters); joint 0 is the wrist at the
-        origin. Compose with the wrist transform for world-frame keypoints.
+        Origin and axes both ride the wrist; the ordering is the MediaPipe
+        21-landmark convention (wrist 0, thumb 1-4, index 5-8, middle 9-12,
+        ring 13-16, little 17-20). Same frame/ordering contract as
+        :meth:`WiLoRHandNode.get_keypoints_wrist` — the right input for hand IK.
         """
-        key = f"{side}_fingers"
-        fingers = np.asarray(self._current_observation[key], dtype=np.float32)
-        return fingers[:, :3, 3].astype(np.float32, copy=False)
+        return np.asarray(self._current_observation[f"{side}_keypoints_3d_wrist"], dtype=np.float32)
+
+    def get_keypoints(self, side: Literal["left", "right"]) -> np.ndarray:
+        """Return the latest (21, 3) AVP world-frame MediaPipe-style keypoints (meters).
+
+        Composed as ``wrist @ keypoints_3d_wrist`` in the AVP world frame
+        (X-right, Y-forward, Z-up after the ``avp_stream`` YUP2ZUP conversion) —
+        the analog of WiLoR's camera-frame ``keypoints_3d``.
+        """
+        return np.asarray(self._current_observation[f"{side}_keypoints_3d"], dtype=np.float32)
 
     def get_pinch_distance(self, side: Literal["left", "right"]) -> float:
         """Return the latest pinch distance (meters) for the given hand."""

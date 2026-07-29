@@ -84,7 +84,7 @@ class WiLoRHandNode(WorldNode[
       ``R(global_orient).T @ keypoints_3d_local``. Origin and axes both ride
       the wrist (MANO root frame convention), so this signal is invariant to
       hand rotation as well as translation — the right input for hand IK.
-      Matches the AVP node's wrist-local ``*_fingers`` convention.
+      Matches the AVP node's wrist-local ``*_keypoints_3d_wrist`` convention.
     - ``keypoints_3d`` (21, 3): camera frame (x right, y down, z forward),
       meters — ``keypoints_3d_local + pred_cam_t_full``.
     - ``keypoints_2d`` (21, 2): pixel coordinates, top-left origin.
@@ -560,7 +560,7 @@ class WiLoRHandNode(WorldNode[
         Origin and axes both ride the wrist (``R(global_orient).T @
         keypoints_3d_local``), so this signal is invariant to wrist translation
         **and** rotation — the right input for hand IK, mirroring the AVP
-        node's wrist-local ``*_fingers`` convention. ``hand`` is required when
+        node's wrist-local ``*_keypoints_3d_wrist`` convention. ``hand`` is required when
         the node was constructed with ``hand="both"``.
         """
         return np.asarray(self._current_observation[self._obs_key(self._resolve_hand(hand), "keypoints_3d_wrist")], dtype=np.float32)
