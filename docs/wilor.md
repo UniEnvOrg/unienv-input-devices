@@ -180,13 +180,48 @@ root-frame convention; mapping it to your robot's EEF frame convention needs
 one constant offset rotation. `keypoints_3d_local` sits between the two:
 wrist-rooted but camera-aligned — invariant to translation only.
 
+## ZED stereo depth fusion (`WiLoRZedHandNode`)
+
+`unienv_input_devices.wilor_zed.WiLoRZedHandNode` is a drop-in subclass that
+consumes a ZED stereo camera (via `unienv_zed.ZedCameraNode` or any object
+whose `get_observation()` returns `left_rgb` / `left_depth` /
+`left_intrinsics`) instead of a UVC webcam, and fixes WiLoR's weakest output —
+the metric wrist translation — with the ZED's calibrated stereo depth:
+
+- WiLoR runs on the ZED's left rectified RGB (RGB↔depth are pixel-aligned).
+- `focal_length` is taken from the true ZED intrinsics (`fx`), no hand-tuning.
+- The wrist 2D keypoint is deprojected through the depth map (median of a 7×7
+  pixel window, valid range 0.1–5.0 m); `wrist_pose` translation and the
+  camera-frame `keypoints_3d` are shifted by the correction delta.
+- Corrections larger than `max_depth_correction` (default 0.15 m) are rejected
+  as depth outliers — the monocular estimate is kept for that frame. Missing
+  depth also falls back to the monocular estimate.
+- Articulation signals (`keypoints_3d_local` / `keypoints_3d_wrist`) are
+  untouched (they are translation-invariant already).
+- The node ticks the ZED camera (`post_environment_step`) before each read, so
+  do not register the same ZED node in the world env when it serves as this
+  node's capture device. `close()` never closes the ZED camera.
+
+```python
+from unienv_input_devices import WiLoRZedHandNode
+from unienv_zed import ZedCameraNode
+
+zed = ZedCameraNode(serial_number=31726771, enable_left_rgb=True,
+                    enable_left_depth=True)  # depth must be enabled!
+node = WiLoRZedHandNode(zed_camera=zed, hand="both")
+```
+
+In `tianji_sim_real` this is wired up as a teleop source:
+`python scripts/teleop.py --sim --device wilor-zed --zed-serial <serial>`.
+
 ## Limitations
 
-- **Monocular depth is model-estimated.** Wrist translation (`pred_cam_t_full`)
-  typically carries ~5-15 cm of error; finger articulation
+- **Monocular depth is model-estimated** (webcam mode). Wrist translation
+  (`pred_cam_t_full`) typically carries ~5-15 cm of error; finger articulation
   (`keypoints_3d_local` / `keypoints_3d_wrist`) is considerably more reliable
   than absolute position. Prefer the local/wrist-frame keypoints for
-  retargeting joint angles.
+  retargeting joint angles. With `WiLoRZedHandNode` the wrist translation is
+  re-anchored to metric stereo depth (see above).
 - **Occlusion degrades silently.** When the hand is partially out of frame the
   pipeline may still return a detection with degraded keypoints. Gate
   downstream behavior on `hand_detected` and on reprojection-error checks
