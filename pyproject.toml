@@ -10,7 +10,7 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest"]
 avp = ["avp_stream"]
-spacemouse = ["pyspacemouse>=2.0"]
+spacemouse = ["pyspacemouse>=2.1"]
 wilor = [
     "torch",
     "opencv-python",

@@ -62,10 +62,10 @@ def _install_fake(monkeypatch, devices, listed=None):
 
     def list_devices():
         module.list_calls += 1
-        return [] if listed is None else listed
+        return {} if listed is None else listed
 
     module.open_by_path = open_by_path
-    module.list_devices = list_devices
+    module.get_connected_devices_by_path = list_devices
     monkeypatch.setitem(sys.modules, "pyspacemouse", module)
     return module
 
@@ -222,7 +222,7 @@ def test_axis_conventions_validation_and_discovery(monkeypatch):
         f"/{name}": FakeDevice()
         for name in ("ros", "hid_z_up", "hid", "unity")
     }
-    listed = [SimpleNamespace(path="/ros", name="SpaceMouse Compact")]
+    listed = {"/ros": "SpaceMouse Compact"}
     module = _install_fake(monkeypatch, devices, listed=listed)
 
     expected = {
@@ -241,5 +241,5 @@ def test_axis_conventions_validation_and_discovery(monkeypatch):
         with pytest.raises(ValueError, match="deadband"):
             SpaceMouseNode(path="/invalid", deadband=value, connect=False)
 
-    assert SpaceMouseNode.list_devices() is listed
+    assert SpaceMouseNode.list_devices() == listed
     assert module.list_calls == 1

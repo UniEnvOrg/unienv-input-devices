@@ -173,8 +173,8 @@ class SpaceMouseNode(WorldNode[
             raise ImportError(
                 "SpaceMouseNode(connect=True) requires pyspacemouse and hidapi. "
                 "Install with `pip install \"unienv-input-devices[spacemouse]\"`. "
-                "On Linux, also install `libhidapi-dev` and configure a udev "
-                "rule granting access to the SpaceMouse hidraw device."
+                "On Linux, also install `libhidapi-dev` and configure a "
+                "udev rule granting access to the SpaceMouse hidraw device."
             ) from e
 
         convention = getattr(
@@ -351,15 +351,20 @@ class SpaceMouseNode(WorldNode[
         return bool(self._current_observation[f"{normalized}_button"][0])
 
     @classmethod
-    def list_devices(cls) -> list:
-        """Return supported connected devices from PySpaceMouse discovery."""
+    def list_devices(cls) -> dict[str, str]:
+        """Return ``{hid_path: device_name}`` for connected SpaceMice.
+
+        Wraps ``pyspacemouse.get_connected_devices_by_path()`` (v2 API), e.g.
+        ``{"/dev/hidraw3": "SpaceMouse Compact"}`` — the paths are exactly
+        what :class:`SpaceMouseNode` takes as its ``path`` argument.
+        """
         try:
             import pyspacemouse  # noqa: PLC0415 - optional dependency
         except ImportError as e:  # pragma: no cover - depends on host setup
             raise ImportError(
                 "SpaceMouseNode.list_devices() requires pyspacemouse and hidapi. "
                 "Install with `pip install \"unienv-input-devices[spacemouse]\"`. "
-                "On Linux, also install `libhidapi-dev` and configure a udev "
-                "rule granting access to SpaceMouse hidraw devices."
+                "On Linux, also install `libhidapi-dev` and configure a "
+                "udev rule granting access to SpaceMouse hidraw devices."
             ) from e
-        return pyspacemouse.list_devices()
+        return dict(pyspacemouse.get_connected_devices_by_path())

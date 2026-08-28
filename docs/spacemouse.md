@@ -13,7 +13,7 @@ Install the package extra:
 pip install "unienv-input-devices[spacemouse]"
 ```
 
-On Debian or Ubuntu, install the hidapi development package:
+On Debian or Ubuntu, install the hidapi runtime library:
 
 ```bash
 sudo apt-get install libhidapi-dev
@@ -53,12 +53,14 @@ devices before constructing it:
 from unienv_input_devices import SpaceMouseNode
 
 devices = SpaceMouseNode.list_devices()
-for device in devices:
-    print(device.path, device.name)
+for path, name in devices.items():
+    print(path, name)
 ```
 
-Use the path returned by discovery, such as `/dev/hidraw3`. The value is an
-opaque HID path on macOS and Windows, and should still be passed unchanged.
+`list_devices()` returns `{hid_path: device_name}`, e.g.
+`{"/dev/hidraw3": "SpaceMouse Compact"}`. Use the path as the node's `path`
+argument. The value is an opaque HID path on macOS and Windows, and should
+still be passed unchanged.
 
 ## Usage
 
