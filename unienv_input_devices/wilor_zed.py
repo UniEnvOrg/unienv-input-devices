@@ -131,6 +131,10 @@ class WiLoRZedHandNode(WiLoRHandNode):
             update_timestep=update_timestep,
         )
 
+    def _metadata_source(self) -> Optional[str]:
+        """The ZED camera feeding the node (its node ``name``), not the unused ``camera_id``."""
+        return str(getattr(self.zed_camera, "name", None) or "zed")
+
     # ========== Hardware connection ==========
 
     def _connect_hardware(self) -> None:

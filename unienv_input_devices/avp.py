@@ -22,6 +22,7 @@ from unienv_interface.backends.numpy import (
     NumpyRNGType,
 )
 from unienv_interface.space import DictSpace, BoxSpace
+from unienv_interface.space.space_utils.metadata_utils import annotate, metadata
 
 # VisionPro 25-joint layout -> MediaPipe 21-landmark layout (wrist 0, thumb
 # 1-4, index 5-8, middle 9-12, ring 13-16, little 17-20). Faithful port of
@@ -34,6 +35,10 @@ _VP_TO_MEDIAPIPE = (
     21, 22, 23, 24,
 )
 _VP_TO_MEDIAPIPE_IDX = np.asarray(_VP_TO_MEDIAPIPE, dtype=np.intp)
+
+# Axes of the AVP world frame after avp_stream's YUP2ZUP conversion; recorded
+# in the space metadata (``axes``) next to ``frame="world"``.
+_AVP_WORLD_AXES = "x right, y forward, z up"
 
 
 class AVPTrackerNode(WorldNode[
@@ -219,6 +224,10 @@ class AVPTrackerNode(WorldNode[
                 ),
             },
         )
+        self.observation_space = annotate(
+            self.observation_space,
+            self._observation_metadata(control_timestep),
+        )
         # Observation-only node: no action space.
         self.action_space = None
 
@@ -245,6 +254,58 @@ class AVPTrackerNode(WorldNode[
         self._streamer = VisionProStreamer(ip=self.ip, record=self.record)
 
     # ========== Internal helpers ==========
+
+    def _observation_metadata(self, control_timestep: Optional[float]) -> Dict[str, dict]:
+        """Space metadata of the observation, keyed by observation key (``""``: the dict itself).
+
+        Every leaf carries ``source`` (the AVP's IP, when given) and ``fps``
+        (the node's observation rate, ``1 / control_timestep``). World-frame
+        entries use ``frame="world"`` with ``axes`` naming the AVP world axes;
+        the 4x4 homogeneous transforms are ``kind="pose"`` with
+        ``rotation="matrix"`` and their translations in meters.
+        """
+        common = {
+            "source": self.ip,
+            "fps": None if control_timestep is None else 1.0 / control_timestep,
+        }
+        world = {"frame": "world", "axes": _AVP_WORLD_AXES}
+        table: Dict[str, dict] = {
+            "": metadata("teleop", label="Apple Vision Pro hand / head tracking", **common),
+            "head": metadata(
+                "pose", rotation="matrix", units="m", **world,
+                label="head pose (4x4 homogeneous transform)", **common,
+            ),
+        }
+        for side in ("left", "right"):
+            table[f"{side}_wrist"] = metadata(
+                "pose", rotation="matrix", units="m", **world, hand=side,
+                label=f"{side} wrist pose (4x4 homogeneous transform)", **common,
+            )
+            table[f"{side}_fingers"] = metadata(
+                "pose", rotation="matrix", units="m", frame="wrist", hand=side,
+                joint_order="visionos_hand_skeleton_25",
+                label=f"{side} hand joint poses (25 x 4x4 homogeneous transforms, joint 0 = wrist)",
+                **common,
+            )
+            table[f"{side}_keypoints_3d_wrist"] = metadata(
+                "keypoints", units="m", frame="wrist", names=["x", "y", "z"], hand=side,
+                keypoint_order="mediapipe_21",
+                label=f"{side} hand keypoints in the wrist frame", **common,
+            )
+            table[f"{side}_keypoints_3d"] = metadata(
+                "keypoints", units="m", **world, names=["x", "y", "z"], hand=side,
+                keypoint_order="mediapipe_21",
+                label=f"{side} hand keypoints in the AVP world frame", **common,
+            )
+            table[f"{side}_pinch_distance"] = metadata(
+                "teleop", units="m", hand=side,
+                label=f"{side} thumb-index pinch distance", **common,
+            )
+            table[f"{side}_wrist_roll"] = metadata(
+                "teleop", units="rad", hand=side,
+                label=f"{side} wrist roll", **common,
+            )
+        return table
 
     def _zero_observation(self) -> Dict[str, NumpyArrayType]:
         """Build the all-zeros observation dict of the correct shapes/dtypes."""

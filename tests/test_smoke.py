@@ -313,3 +313,65 @@ def test_wilor_hand_node_single_hand_rejects_inactive_hand():
             node.get_keypoints(hand="left")
     finally:
         node.close()
+
+
+def test_avp_observation_space_metadata():
+    from unienv_interface.space.space_utils.metadata_utils import validate_metadata
+
+    node = AVPTrackerNode(ip="192.168.50.127", connect=False, control_timestep=0.04)
+    space = node.observation_space
+    validate_metadata(space)
+    assert space.metadata["kind"] == "teleop"
+    for key in EXPECTED_OBS_KEYS:
+        md = space.spaces[key].metadata
+        assert md["kind"] in ("pose", "keypoints", "teleop"), key
+        assert md["source"] == "192.168.50.127", key
+        assert md["fps"] == pytest.approx(25.0), key
+
+    head = space.spaces["head"].metadata
+    assert (head["kind"], head["frame"], head["rotation"], head["units"]) == ("pose", "world", "matrix", "m")
+    assert head["axes"] == "x right, y forward, z up"
+    for side in ("left", "right"):
+        assert space.spaces[f"{side}_wrist"].metadata["frame"] == "world"
+        fingers = space.spaces[f"{side}_fingers"].metadata
+        assert (fingers["kind"], fingers["frame"], fingers["hand"]) == ("pose", "wrist", side)
+        kp_wrist = space.spaces[f"{side}_keypoints_3d_wrist"].metadata
+        assert (kp_wrist["kind"], kp_wrist["frame"], kp_wrist["units"]) == ("keypoints", "wrist", "m")
+        assert kp_wrist["keypoint_order"] == "mediapipe_21"
+        assert space.spaces[f"{side}_keypoints_3d"].metadata["frame"] == "world"
+        assert space.spaces[f"{side}_pinch_distance"].metadata["units"] == "m"
+        assert space.spaces[f"{side}_wrist_roll"].metadata["units"] == "rad"
+
+    # Without an IP there is no source; without a control timestep, no fps.
+    bare = AVPTrackerNode(connect=False, control_timestep=None).observation_space
+    validate_metadata(bare)
+    assert "source" not in bare.spaces["head"].metadata
+    assert "fps" not in bare.spaces["head"].metadata
+
+
+@pytest.mark.parametrize("hand", ["right", "both"])
+def test_wilor_observation_space_metadata(hand):
+    from unienv_interface.space.space_utils.metadata_utils import validate_metadata
+
+    node = WiLoRHandNode(camera_id=2, hand=hand, connect=False)
+    space = node.observation_space
+    validate_metadata(space)
+    assert space.metadata["kind"] == "teleop"
+    sides = ("left", "right") if hand == "both" else (hand,)
+    for side in sides:
+        prefix = f"{side}_" if hand == "both" else ""
+        for key in WILORED_EXPECTED_OBS_KEYS:
+            md = space.spaces[prefix + key].metadata
+            assert md["hand"] == side
+            assert md["source"] == "2"
+            assert md["fps"] == pytest.approx(25.0)
+        md = {key: space.spaces[prefix + key].metadata for key in WILORED_EXPECTED_OBS_KEYS}
+        assert (md["keypoints_3d"]["kind"], md["keypoints_3d"]["frame"], md["keypoints_3d"]["units"]) == (
+            "keypoints", "camera_cv", "m")
+        assert md["keypoints_3d_local"]["frame"] == "camera_cv"
+        assert md["keypoints_3d_local"]["origin"] == "wrist"
+        assert md["keypoints_3d_wrist"]["frame"] == "wrist"
+        assert md["keypoints_2d"]["units"] == "px"
+        assert (md["wrist_pose"]["kind"], md["wrist_pose"]["frame"], md["wrist_pose"]["rotation"]) == (
+            "pose", "camera_cv", "matrix")
+        assert md["hand_detected"]["kind"] == "mask"

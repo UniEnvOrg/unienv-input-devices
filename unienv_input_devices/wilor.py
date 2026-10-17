@@ -61,6 +61,42 @@ from unienv_interface.backends.numpy import (
     NumpyRNGType,
 )
 from unienv_interface.space import DictSpace, BoxSpace
+from unienv_interface.space.space_utils.metadata_utils import annotate, metadata
+
+
+# Space metadata of each per-hand observation entry, keyed by the unprefixed
+# observation key. ``frame="camera_cv"`` is the OpenCV camera frame (x right,
+# y down, z forward) of the capturing camera named by ``source``.
+_KEYPOINT_ORDER = "mediapipe_21"
+_OBSERVATION_METADATA: Dict[str, dict] = {
+    "keypoints_3d_local": metadata(
+        "keypoints", units="m", frame="camera_cv", origin="wrist",
+        names=["x", "y", "z"], keypoint_order=_KEYPOINT_ORDER,
+        label="hand keypoints, wrist-rooted, camera-aligned axes",
+    ),
+    "keypoints_3d_wrist": metadata(
+        "keypoints", units="m", frame="wrist", wrist_frame="mano_root",
+        names=["x", "y", "z"], keypoint_order=_KEYPOINT_ORDER,
+        label="hand keypoints in the MANO wrist frame",
+    ),
+    "keypoints_3d": metadata(
+        "keypoints", units="m", frame="camera_cv",
+        names=["x", "y", "z"], keypoint_order=_KEYPOINT_ORDER,
+        label="hand keypoints in the camera frame",
+    ),
+    "keypoints_2d": metadata(
+        "keypoints", units="px", origin="top_left",
+        names=["u", "v"], keypoint_order=_KEYPOINT_ORDER,
+        label="hand keypoints in image pixels (x right, y down)",
+    ),
+    "wrist_pose": metadata(
+        "pose", units="m", frame="camera_cv", rotation="matrix",
+        label="wrist pose in the camera frame (4x4 homogeneous transform)",
+    ),
+    "hand_detected": metadata(
+        "mask", label="1 if the hand was detected in the latest frame, else 0 (geometry held)",
+    ),
+}
 
 
 class WiLoRHandNode(WorldNode[
@@ -227,7 +263,10 @@ class WiLoRHandNode(WorldNode[
                 dtype=np.float32,
                 shape=(1,),
             )
-        self.observation_space = DictSpace(NumpyComputeBackend, spaces)
+        self.observation_space = annotate(
+            DictSpace(NumpyComputeBackend, spaces),
+            self._observation_metadata(control_timestep),
+        )
         # Observation-only node: no action space.
         self.action_space = None
 
@@ -325,6 +364,29 @@ class WiLoRHandNode(WorldNode[
         (``"left_keypoints_3d"`` / ``"right_keypoints_3d"``).
         """
         return f"{hand}_{base}" if self.hand == "both" else base
+
+    def _metadata_source(self) -> Optional[str]:
+        """The ``source`` recorded in the space metadata: the capturing camera."""
+        return str(self.camera_id)
+
+    def _observation_metadata(self, control_timestep: Optional[float]) -> Dict[str, dict]:
+        """Space metadata of the observation, keyed by observation key (``""``: the dict itself).
+
+        Each entry of :data:`_OBSERVATION_METADATA` plus ``hand``, ``source``
+        (:meth:`_metadata_source`) and ``fps`` (the node's observation rate,
+        ``1 / control_timestep``).
+        """
+        fps = None if control_timestep is None else 1.0 / control_timestep
+        common = {
+            key: value
+            for key, value in (("source", self._metadata_source()), ("fps", fps))
+            if value is not None
+        }
+        table: Dict[str, dict] = {"": metadata("teleop", label="WiLoR hand tracking", **common)}
+        for h in self._active_hands:
+            for base, md in _OBSERVATION_METADATA.items():
+                table[self._obs_key(h, base)] = {**md, "hand": h, **common}
+        return table
 
     def _zero_observation(self) -> Dict[str, NumpyArrayType]:
         """Build the all-zeros observation dict of the correct shapes/dtypes.

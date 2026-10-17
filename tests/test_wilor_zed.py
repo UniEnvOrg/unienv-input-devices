@@ -187,3 +187,22 @@ def test_observation_space_matches_wilor_hand_node():
         other = webcam_node.observation_space.spaces[key]
         assert sub.shape == other.shape
         assert sub.dtype == other.dtype
+
+
+def test_observation_space_metadata_names_the_zed_camera():
+    from unienv_interface.space.space_utils.metadata_utils import validate_metadata
+
+    zed = FakeZedCamera()
+    zed.name = "zed_front"
+    zed_space = WiLoRZedHandNode(zed_camera=zed, hand="both", connect=False).observation_space
+    webcam_space = WiLoRHandNode(hand="both", connect=False).observation_space
+    validate_metadata(zed_space)
+    # `==` ignores metadata: compare it explicitly. Everything but the source
+    # (the ZED node's name instead of the unused UVC camera_id) is inherited.
+    for key, sub in zed_space.spaces.items():
+        assert sub.metadata["source"] == "zed_front"
+        expected = {**webcam_space.spaces[key].metadata, "source": "zed_front"}
+        assert dict(sub.metadata) == expected
+    # Nameless duck-typed cameras fall back to "zed".
+    unnamed = WiLoRZedHandNode(zed_camera=FakeZedCamera(), connect=False).observation_space
+    assert unnamed.spaces["keypoints_3d"].metadata["source"] == "zed"

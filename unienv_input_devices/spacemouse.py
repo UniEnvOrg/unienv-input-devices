@@ -49,6 +49,7 @@ from unienv_interface.backends.numpy import (
     NumpyRNGType,
 )
 from unienv_interface.space import BoxSpace, DictSpace
+from unienv_interface.space.space_utils.metadata_utils import metadata
 from unienv_interface.world import RealWorld, World, WorldNode
 
 
@@ -78,6 +79,14 @@ class SpaceMouseNode(WorldNode[
         "hid_z_up": "HID_Z_UP",
         "hid": "HID",
         "unity": "UNITY",
+    }
+    # Device body-frame axes of each convention (pyspacemouse.AxisConvention),
+    # recorded in the space metadata as ``axes``.
+    _CONVENTION_AXES = {
+        "ros": "x forward, y left, z up (right-handed)",
+        "hid_z_up": "x right, y forward, z up (right-handed)",
+        "hid": "x right, y toward the operator, z down (right-handed)",
+        "unity": "x right, y up, z forward (left-handed)",
     }
 
     def __init__(
@@ -131,6 +140,17 @@ class SpaceMouseNode(WorldNode[
         if self.connect:
             self._connect_hardware()
 
+        # Button names are final here (resolved from the device spec when
+        # connected), so the per-button metadata names the real buttons.
+        common = {
+            "source": self.path,
+            "fps": None if control_timestep is None else 1.0 / control_timestep,
+        }
+        axes = {
+            "frame": "device",
+            "axis_convention": self.axis_convention,
+            "axes": self._CONVENTION_AXES[self.axis_convention],
+        }
         spaces: Dict[str, BoxSpace] = {
             "translation": BoxSpace(
                 NumpyComputeBackend,
@@ -138,6 +158,11 @@ class SpaceMouseNode(WorldNode[
                 high=1.0,
                 dtype=np.float32,
                 shape=(3,),
+                metadata=metadata(
+                    "teleop", units="normalized", normalized=True,
+                    names=["x", "y", "z"], **axes,
+                    label="cap translation deflection", **common,
+                ),
             ),
             "rotation": BoxSpace(
                 NumpyComputeBackend,
@@ -145,6 +170,11 @@ class SpaceMouseNode(WorldNode[
                 high=1.0,
                 dtype=np.float32,
                 shape=(3,),
+                metadata=metadata(
+                    "teleop", units="normalized", normalized=True,
+                    names=["roll", "pitch", "yaw"], **axes,
+                    label="cap rotation deflection about x, y, z", **common,
+                ),
             ),
         }
         for button in self.button_names:
@@ -154,8 +184,16 @@ class SpaceMouseNode(WorldNode[
                 high=1.0,
                 dtype=np.float32,
                 shape=(1,),
+                metadata=metadata(
+                    "teleop", names=[button], button=button,
+                    label=f"{button} button (1 = pressed)", **common,
+                ),
             )
-        self.observation_space = DictSpace(NumpyComputeBackend, spaces)
+        self.observation_space = DictSpace(
+            NumpyComputeBackend,
+            spaces,
+            metadata=metadata("teleop", label="SpaceMouse", **common),
+        )
         self._space_button_names = self.button_names
         self.action_space = None
 

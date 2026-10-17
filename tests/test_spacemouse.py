@@ -243,3 +243,30 @@ def test_axis_conventions_validation_and_discovery(monkeypatch):
 
     assert SpaceMouseNode.list_devices() == listed
     assert module.list_calls == 1
+
+
+def test_observation_space_metadata(monkeypatch):
+    from unienv_interface.space.space_utils.metadata_utils import validate_metadata
+
+    _install_fake(monkeypatch, {"/meta": FakeDevice(("LEFT", "RIGHT", "MENU"))})
+    node = SpaceMouseNode(path="/meta", axis_convention="hid_z_up")
+    space = node.observation_space
+    validate_metadata(space)
+    assert space.metadata["kind"] == "teleop"
+    for key in ("translation", "rotation"):
+        md = space.spaces[key].metadata
+        assert md["kind"] == "teleop"
+        assert md["normalized"] is True
+        assert md["units"] == "normalized"
+        assert md["frame"] == "device"
+        assert md["axis_convention"] == "hid_z_up"
+        assert md["source"] == "/meta"
+        assert md["fps"] == pytest.approx(25.0)
+    assert tuple(space.spaces["translation"].metadata["names"]) == ("x", "y", "z")
+    assert tuple(space.spaces["rotation"].metadata["names"]) == ("roll", "pitch", "yaw")
+    # Button metadata names the buttons discovered on the device.
+    for name in ("left", "right", "menu"):
+        md = space.spaces[f"{name}_button"].metadata
+        assert md["kind"] == "teleop"
+        assert md["button"] == name
+        assert tuple(md["names"]) == (name,)

@@ -14,6 +14,17 @@ exposed as observation-only `WorldNode`s.
 Each device has its own optional extra and its own README covering hardware
 setup, installation, calibration, and usage — follow the links above.
 
+## Space metadata
+
+Every observation entry is described with unienv space metadata
+(`space.metadata`): what it is (`kind`: `"pose"`, `"keypoints"`, `"teleop"`,
+`"mask"`), its `units`, reference `frame` (plus an `axes` note where the frame
+is device specific), `rotation` representation of 4x4 transforms
+(`"matrix"`), `hand`, `source` (AVP IP, SpaceMouse HID path, camera) and
+`fps` (`1 / control_timestep`). For example,
+`find_spaces_by_metadata(node.observation_space, kind="keypoints")` finds the
+keypoint entries of any hand tracker.
+
 ## Installation
 
 The base package installs with no device SDKs (all nodes import their optional
