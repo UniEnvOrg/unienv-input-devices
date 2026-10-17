@@ -13,18 +13,12 @@ dependencies = [
 test = ["pytest", "scipy"]  # scipy: the AVP / WiLoR keypoint math tests
 avp = ["avp_stream"]
 spacemouse = ["pyspacemouse>=2.1"]
+# PyPI rejects direct (git) dependencies, so `chumpy` (git master) and the
+# `wilor_mini` fork are installed separately; see docs/wilor.md.
 wilor = [
     "torch",
     "opencv-python",
     "scipy",
-    # chumpy must come from git master (0.71) — PyPI 0.70 is broken on
-    # Python >= 3.11 (inspect.getargspec removed). Its legacy setup.py does
-    # `import pip`, so this extra only installs with --no-build-isolation:
-    #   pip install "unienv-input-devices[wilor]" --no-build-isolation
-    "chumpy @ git+https://github.com/mattloper/chumpy@master",
-    # Not on PyPI; this fork carries torch>=2.6 / Python>=3.11 compat fixes
-    # (relaxed pins, ultralytics>=8.4, explicit weights_only=False).
-    "wilor_mini @ git+https://github.com/realquantumcookie/WiLoR-mini",
 ]
 
 [project.urls]

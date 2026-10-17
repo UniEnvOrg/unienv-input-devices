@@ -15,3 +15,4 @@ All notable changes to this project will be documented in this file.
   `WiLoRZedHandNode` (source = the ZED node's name)
 - Require `unienv>=0.0.1b16` (space metadata)
 - Licensed under the Apache License 2.0; `NOTICE` carries the copyright and third-party attributions.
+- The `wilor` extra no longer pins `chumpy` / `wilor_mini` from git (PyPI rejects direct dependencies); install them separately, see `docs/wilor.md`.

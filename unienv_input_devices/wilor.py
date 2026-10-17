@@ -337,11 +337,14 @@ class WiLoRHandNode(WorldNode[
         except ImportError as e:  # pragma: no cover — requires wilor_mini
             raise ImportError(
                 "WiLoRHandNode(connect=True) requires the 'wilor_mini' package, "
-                "which is not on PyPI. Install it via this package's 'wilor' "
-                "extra (pulls a torch>=2.6-compatible fork; --no-build-isolation "
-                "is needed for chumpy's legacy setup.py; see docs/wilor.md):\n"
-                '  pip install "unienv-input-devices[wilor]" '
-                "--no-build-isolation\n"
+                "which is not on PyPI. Install the 'wilor' extra, then chumpy "
+                "(git master; --no-build-isolation for its legacy setup.py) and "
+                "the torch>=2.6-compatible wilor_mini fork (see docs/wilor.md):\n"
+                '  pip install "unienv-input-devices[wilor]"\n'
+                '  pip install --no-build-isolation '
+                '"chumpy @ git+https://github.com/mattloper/chumpy@master"\n'
+                '  pip install '
+                '"wilor_mini @ git+https://github.com/realquantumcookie/WiLoR-mini"\n'
                 "A CUDA PyTorch build is strongly recommended. Model "
                 "weights and MANO assets auto-download from HuggingFace on first "
                 "use (CC-BY-NC-ND / non-commercial terms — see README)."

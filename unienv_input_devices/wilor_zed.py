@@ -168,9 +168,9 @@ class WiLoRZedHandNode(WiLoRHandNode):
         except ImportError as e:  # pragma: no cover — requires wilor_mini
             raise ImportError(
                 "WiLoRZedHandNode(connect=True) requires the 'wilor_mini' "
-                "package. Install it via this package's 'wilor' extra "
-                "(--no-build-isolation is needed for chumpy's legacy setup.py; "
-                "see docs/wilor.md). Model weights and MANO assets "
+                "package, which is not on PyPI: install the 'wilor' extra, then "
+                "chumpy and the wilor_mini fork from git (see docs/wilor.md). "
+                "Model weights and MANO assets "
                 "auto-download from HuggingFace on first use (CC-BY-NC-ND / "
                 "non-commercial terms — see README)."
             ) from e

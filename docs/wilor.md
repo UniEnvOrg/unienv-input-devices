@@ -22,12 +22,15 @@ downstream nodes.
 ## Installation
 
 ```bash
-pip install "unienv-input-devices[wilor]" --no-build-isolation
+pip install "unienv-input-devices[wilor]"
+pip install --no-build-isolation "chumpy @ git+https://github.com/mattloper/chumpy@master"
+pip install "wilor_mini @ git+https://github.com/realquantumcookie/WiLoR-mini"
 ```
 
-The `wilor` extra pulls:
+The `wilor` extra pulls the WiLoR runtime deps (`torch` / `opencv-python` /
+`scipy`). The other two are installed from git, since PyPI does not accept
+packages that depend on git URLs:
 
-- the WiLoR runtime deps (`torch` / `opencv-python` / `scipy`),
 - `wilor_mini` from a [compat fork](https://github.com/realquantumcookie/WiLoR-mini)
   of `warmshao/WiLoR-mini` (upstream pins `torch<=2.5`; the fork relaxes the
   pins, bumps `ultralytics>=8.4`, and passes explicit `weights_only=False`, so
@@ -36,6 +39,7 @@ The `wilor` extra pulls:
   (`inspect.getargspec` was removed), and its legacy `setup.py` does
   `import pip`, which fails under pip's default build isolation — hence the
   `--no-build-isolation` flag, which makes `pip` importable during the build.
+  Install it before `wilor_mini`, which depends on it.
   `setuptools` and `wheel` must be present in your environment (they are in
   any standard conda/venv setup).
 

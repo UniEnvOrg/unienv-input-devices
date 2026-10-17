@@ -39,7 +39,7 @@ Add the extra for the device(s) you want, e.g.:
 ```bash
 pip install "unienv-input-devices[avp]"
 pip install "unienv-input-devices[spacemouse]"
-pip install "unienv-input-devices[wilor]" --no-build-isolation  # see docs/wilor.md
+pip install "unienv-input-devices[wilor]"  # + chumpy and wilor_mini from git, see docs/wilor.md
 ```
 
 ## Development
