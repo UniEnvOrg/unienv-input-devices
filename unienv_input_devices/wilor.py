@@ -541,7 +541,8 @@ class WiLoRHandNode(WorldNode[
 
     def close(self) -> None:
         """Best-effort teardown of the webcam capture."""
-        if self._cap is not None:
+        # getattr: also called from __del__ on a node whose __init__ raised early
+        if getattr(self, "_cap", None) is not None:
             try:
                 self._cap.release()
             except Exception:

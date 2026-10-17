@@ -206,3 +206,9 @@ def test_observation_space_metadata_names_the_zed_camera():
     # Nameless duck-typed cameras fall back to "zed".
     unnamed = WiLoRZedHandNode(zed_camera=FakeZedCamera(), connect=False).observation_space
     assert unnamed.spaces["keypoints_3d"].metadata["source"] == "zed"
+
+
+def test_close_after_failed_construction_does_not_raise():
+    # __del__ -> close() runs on nodes whose __init__ raised before _cap was set
+    node = object.__new__(WiLoRZedHandNode)
+    node.close()
