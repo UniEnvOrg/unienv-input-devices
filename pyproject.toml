@@ -8,7 +8,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "scipy"]  # scipy: the AVP / WiLoR keypoint math tests
 avp = ["avp_stream"]
 spacemouse = ["pyspacemouse>=2.1"]
 wilor = [
