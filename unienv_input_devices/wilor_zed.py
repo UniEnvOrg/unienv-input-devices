@@ -32,7 +32,13 @@ The ``zed_camera`` argument is duck-typed: any object whose
 - ``left_depth``: float32 (H, W) meters (0 or NaN = invalid),
 - ``left_intrinsics``: float32 (3, 3) pinhole intrinsics of the left stream,
 
-works — e.g. ``unienv_zed.ZedCameraNode``. The node ticks the camera
+works — e.g. ``unienv_zed.ZedCameraNode``. If the camera has an
+``observation_space`` (as ``ZedCameraNode`` does), its space metadata is read
+at construction: ``left_rgb`` must be present with ``format`` ``"rgb"`` or
+``"bgr"``, and ``left_depth`` (optional) is converted to meters from its
+``units`` (``"m"``, ``"cm"``, ``"mm"``, ``"in"`` or ``"ft"``, as written by
+``unienv_zed`` for each ``unit``); other values raise a ``ValueError``.
+Missing metadata keeps the contract above (RGB, meters). The node ticks the camera
 (``post_environment_step``) before each read, exactly like ``cap.read()``
 grabs a fresh webcam frame in :class:`WiLoRHandNode` — so do **not** register
 the same ZED node in the world env when it serves as this node's capture
@@ -45,7 +51,7 @@ Licensing: WiLoR weights are CC-BY-NC-ND and MANO assets are non-commercial
 (see ``wilor.py``); this module vendors neither.
 """
 
-from typing import Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 import numpy as np
 
@@ -53,6 +59,16 @@ from unienv_interface.world import RealWorld
 from unienv_interface.backends.numpy import NumpyArrayType
 
 from .wilor import WiLoRHandNode
+
+# Meters per unit of each depth ``units`` written by ``unienv_zed`` (its ``_DEPTH_UNITS``).
+_DEPTH_UNITS_TO_M: Dict[str, float] = {
+    "m": 1.0,
+    "cm": 0.01,
+    "mm": 0.001,
+    "in": 0.0254,
+    "ft": 0.3048,
+}
+_SUPPORTED_RGB_FORMATS = ("rgb", "bgr")
 
 
 class WiLoRZedHandNode(WiLoRHandNode):
@@ -107,6 +123,7 @@ class WiLoRZedHandNode(WiLoRHandNode):
                 "WiLoRHandNode instead."
             )
         self.zed_camera = zed_camera
+        self._inspect_zed_space()
         self.max_depth_correction = float(max_depth_correction)
         self._zed_intrinsics: Optional[np.ndarray] = None
         # True intrinsics win unless the caller explicitly forces a focal.
@@ -131,9 +148,66 @@ class WiLoRZedHandNode(WiLoRHandNode):
             update_timestep=update_timestep,
         )
 
+    def _inspect_zed_space(self) -> None:
+        """Read the image format and depth units from the ZED's space metadata.
+
+        Sets ``_zed_rgb_format`` (``"rgb"`` / ``"bgr"``), ``_depth_scale_to_m``
+        (meters per depth unit) and ``_zed_source`` / ``_zed_serial_number``
+        (from the ``left_rgb`` metadata, ``None`` if absent). Cameras without
+        an ``observation_space`` (or without metadata) are taken to follow the
+        module contract: RGB images, depth in meters.
+        """
+        self._zed_rgb_format = "rgb"
+        self._depth_scale_to_m = 1.0
+        self._zed_source: Optional[str] = None
+        self._zed_serial_number: Optional[Any] = None
+        space = getattr(self.zed_camera, "observation_space", None)
+        spaces = getattr(space, "spaces", None)
+        if spaces is None:
+            return
+        if "left_rgb" not in spaces:
+            raise ValueError(
+                "WiLoRZedHandNode needs the ZED camera's left RGB stream, but its "
+                f"observation space has no 'left_rgb' (keys: {sorted(spaces)}); "
+                "construct the ZED node with enable_left_rgb=True."
+            )
+        rgb_md = getattr(spaces["left_rgb"], "metadata", None) or {}
+        rgb_format = rgb_md.get("format", "rgb")
+        if rgb_format not in _SUPPORTED_RGB_FORMATS:
+            raise ValueError(
+                f"WiLoRZedHandNode supports a ZED 'left_rgb' format of "
+                f"{' / '.join(_SUPPORTED_RGB_FORMATS)}, got {rgb_format!r}."
+            )
+        self._zed_rgb_format = rgb_format
+        self._zed_source = rgb_md.get("source")
+        self._zed_serial_number = rgb_md.get("serial_number")
+        if "left_depth" in spaces:
+            depth_md = getattr(spaces["left_depth"], "metadata", None) or {}
+            units = depth_md.get("units", "m")
+            if units not in _DEPTH_UNITS_TO_M:
+                raise ValueError(
+                    f"WiLoRZedHandNode cannot convert ZED 'left_depth' units {units!r} to "
+                    f"meters; supported: {sorted(_DEPTH_UNITS_TO_M)}."
+                )
+            self._depth_scale_to_m = _DEPTH_UNITS_TO_M[units]
+
     def _metadata_source(self) -> Optional[str]:
-        """The ZED camera feeding the node (its node ``name``), not the unused ``camera_id``."""
+        """The ZED camera feeding the node, not the unused ``camera_id``.
+
+        The ``source`` of the ZED's ``left_rgb`` (its serial number for
+        ``unienv_zed.ZedCameraNode``), so the keypoints name the same camera as
+        the ZED's own leaves; else the ZED node's ``name``, else ``"zed"``.
+        """
+        if self._zed_source is not None:
+            return str(self._zed_source)
         return str(getattr(self.zed_camera, "name", None) or "zed")
+
+    def _observation_metadata(self, control_timestep: Optional[float]) -> Dict[str, dict]:
+        """The inherited metadata plus the ZED ``serial_number``, when known."""
+        table = super()._observation_metadata(control_timestep)
+        if self._zed_serial_number is not None:
+            table = {key: {**md, "serial_number": self._zed_serial_number} for key, md in table.items()}
+        return table
 
     # ========== Hardware connection ==========
 
@@ -258,8 +332,9 @@ class WiLoRZedHandNode(WiLoRHandNode):
         Same lifecycle semantics as :meth:`WiLoRHandNode.post_environment_step`
         (hold-last geometry per hand, ``hand_detected`` gating), except the
         frame comes from ``zed_camera.get_observation()``: ``left_rgb`` is
-        converted RGB→BGR for the WiLoR pipeline and ``left_depth`` re-anchors
-        the wrist translation when valid.
+        converted RGB→BGR for the WiLoR pipeline (unless already BGR) and
+        ``left_depth``, converted to meters, re-anchors the wrist translation
+        when valid.
         """
         if not self.connect or self._pipe is None:
             return
@@ -275,9 +350,12 @@ class WiLoRZedHandNode(WiLoRHandNode):
                 self._current_observation[self._obs_key(h, "hand_detected")] = np.zeros((1,), dtype=np.float32)
             return
         # WiLoR expects BGR (native OpenCV order); the ZED node emits RGB.
-        frame = np.ascontiguousarray(rgb[:, :, ::-1])
+        frame = np.ascontiguousarray(rgb if self._zed_rgb_format == "bgr" else rgb[:, :, ::-1])
         depth = obs.get("left_depth")
-        depth = None if depth is None else np.asarray(depth, dtype=np.float32)
+        if depth is not None:
+            depth = np.asarray(depth, dtype=np.float32)
+            if self._depth_scale_to_m != 1.0:
+                depth = depth * np.float32(self._depth_scale_to_m)  # to meters
 
         outputs = self._pipe.predict(frame)
         for h in self._active_hands:

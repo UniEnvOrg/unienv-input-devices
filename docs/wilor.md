@@ -205,6 +205,16 @@ the metric wrist translation — with the ZED's calibrated stereo depth:
 - The node ticks the ZED camera (`post_environment_step`) before each read, so
   do not register the same ZED node in the world env when it serves as this
   node's capture device. `close()` never closes the ZED camera.
+- When the camera has an `observation_space` (as `ZedCameraNode` does), its
+  space metadata is checked at construction: `left_rgb` is required, with
+  `format` `"rgb"` or `"bgr"`, and `left_depth` is converted to meters from
+  its `units` (`"m"`, `"cm"`, `"mm"`, `"in"`, `"ft"`, i.e. any `ZedUnit`);
+  anything else raises a `ValueError`. Without metadata, RGB images and depth
+  in meters are assumed.
+- The observation metadata's `source` is the ZED's `left_rgb` `source` (its
+  serial number) with its `serial_number`, so the keypoints name the same
+  camera as the ZED's own leaves; cameras without it fall back to the ZED
+  node's `name`.
 
 ```python
 from unienv_input_devices import WiLoRZedHandNode

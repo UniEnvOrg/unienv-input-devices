@@ -212,3 +212,126 @@ def test_close_after_failed_construction_does_not_raise():
     # __del__ -> close() runs on nodes whose __init__ raised before _cap was set
     node = object.__new__(WiLoRZedHandNode)
     node.close()
+
+
+# ---------------------------------------------------------------------------
+# ZED space metadata: depth units and image format
+# ---------------------------------------------------------------------------
+
+def _zed_space(*, depth_units="m", rgb_format="rgb", with_depth=True, with_rgb=True,
+               source="31726771", serial_number=31726771):
+    """An observation space like ``unienv_zed.build_zed_observation_space`` writes."""
+    from unienv_interface.backends.numpy import NumpyComputeBackend
+    from unienv_interface.space import BoxSpace, DictSpace
+    from unienv_interface.space.space_utils.metadata_utils import (
+        depth_metadata, image_metadata, metadata,
+    )
+
+    camera = {k: v for k, v in (("source", source), ("serial_number", serial_number)) if v is not None}
+    spaces = {}
+    if with_rgb:
+        spaces["left_rgb"] = BoxSpace(
+            NumpyComputeBackend, 0, 255, np.uint8, shape=(_H, _W, 3),
+            metadata=image_metadata(format=rgb_format, side="left", **camera),
+        )
+    if with_depth:
+        spaces["left_depth"] = BoxSpace(
+            NumpyComputeBackend, 0.0, np.inf, np.float32, shape=(_H, _W),
+            metadata=depth_metadata(units=depth_units, side="left", **camera),
+        )
+    spaces["left_intrinsics"] = BoxSpace(
+        NumpyComputeBackend, -np.inf, np.inf, np.float32, shape=(3, 3),
+        metadata=metadata("intrinsics", frame="camera_cv", units="px", **camera),
+    )
+    return DictSpace(NumpyComputeBackend, spaces)
+
+
+class FakeZedCameraWithSpace(FakeZedCamera):
+    """A fake ZED that also exposes an ``observation_space`` with metadata."""
+
+    def __init__(self, space, depth_value=_TRUE_DEPTH):
+        super().__init__(depth_value=depth_value)
+        self.observation_space = space
+        self.name = "zed_node"
+
+
+@pytest.mark.parametrize(
+    "units, scale",
+    [("m", 1.0), ("cm", 100.0), ("mm", 1000.0), ("in", 1 / 0.0254), ("ft", 1 / 0.3048)],
+)
+def test_depth_is_converted_to_meters_from_zed_units(units, scale):
+    zed = FakeZedCameraWithSpace(_zed_space(depth_units=units), depth_value=_TRUE_DEPTH * scale)
+    node = _make_node(zed, FakePipe([_make_detection()]))
+    node.post_environment_step(0.04)
+    np.testing.assert_allclose(node.get_wrist_pose()[:3, 3], [0.0, 0.0, _TRUE_DEPTH], atol=1e-5)
+
+
+def test_mm_depth_without_conversion_would_be_rejected():
+    # Sanity check of the fixture: 500 mm read as meters is out of range, so
+    # without the unit conversion the monocular estimate would be kept.
+    node = _make_node(FakeZedCamera(depth_value=_TRUE_DEPTH * 1000.0), FakePipe([_make_detection()]))
+    node.post_environment_step(0.04)
+    np.testing.assert_allclose(node.get_wrist_pose()[:3, 3], _MONO_CAM_T, atol=1e-6)
+
+
+def test_unknown_depth_units_are_rejected():
+    with pytest.raises(ValueError, match="units"):
+        WiLoRZedHandNode(zed_camera=FakeZedCameraWithSpace(_zed_space(depth_units="furlong")), connect=False)
+
+
+def test_missing_left_rgb_is_rejected():
+    with pytest.raises(ValueError, match="left_rgb"):
+        WiLoRZedHandNode(zed_camera=FakeZedCameraWithSpace(_zed_space(with_rgb=False)), connect=False)
+
+
+@pytest.mark.parametrize("rgb_format", ["rgba", "gray"])
+def test_unsupported_rgb_format_is_rejected(rgb_format):
+    with pytest.raises(ValueError, match="format"):
+        WiLoRZedHandNode(zed_camera=FakeZedCameraWithSpace(_zed_space(rgb_format=rgb_format)), connect=False)
+
+
+def test_bgr_frames_are_passed_through():
+    zed = FakeZedCameraWithSpace(_zed_space(rgb_format="bgr"))
+    pipe = FakePipe([_make_detection()])
+    node = _make_node(zed, pipe)
+    node.post_environment_step(0.04)
+    # The fake serves channels (1, 2, 3); declared BGR, they reach WiLoR unchanged.
+    assert tuple(pipe.frames[0][0, 0]) == (1, 2, 3)
+
+
+def test_rgb_only_zed_space_skips_depth_correction():
+    zed = FakeZedCameraWithSpace(_zed_space(with_depth=False))
+    del zed._obs["left_depth"]
+    node = _make_node(zed, FakePipe([_make_detection()]))
+    node.post_environment_step(0.04)
+    np.testing.assert_allclose(node.get_wrist_pose()[:3, 3], _MONO_CAM_T, atol=1e-6)
+
+
+def test_metadata_source_comes_from_zed_rgb_metadata():
+    from unienv_interface.space.space_utils.metadata_utils import validate_metadata
+
+    zed = FakeZedCameraWithSpace(_zed_space(depth_units="mm"))
+    space = WiLoRZedHandNode(zed_camera=zed, hand="both", connect=False).observation_space
+    validate_metadata(space)
+    assert space.metadata["source"] == "31726771"
+    assert space.metadata["serial_number"] == 31726771
+    for sub in space.spaces.values():
+        assert sub.metadata["source"] == "31726771"
+        assert sub.metadata["serial_number"] == 31726771
+
+    # A space without a source falls back to the ZED node's name.
+    zed = FakeZedCameraWithSpace(_zed_space(source=None, serial_number=None))
+    space = WiLoRZedHandNode(zed_camera=zed, connect=False).observation_space
+    assert space.spaces["keypoints_3d"].metadata["source"] == "zed_node"
+    assert "serial_number" not in space.spaces["keypoints_3d"].metadata
+
+
+@pytest.mark.parametrize("unit", ["METER", "CENTIMETER", "MILLIMETER", "INCH", "FOOT"])
+def test_every_unienv_zed_unit_is_supported(unit):
+    unienv_zed = pytest.importorskip("unienv_zed")
+    space = unienv_zed.build_zed_observation_space(
+        height=_H, width=_W, fps=30, serial_number=123, unit=unit, enable_left_depth=True,
+    )
+    node = WiLoRZedHandNode(zed_camera=FakeZedCameraWithSpace(space), connect=False)
+    assert node._depth_scale_to_m > 0
+    assert node.observation_space.spaces["keypoints_3d"].metadata["source"] == "123"
